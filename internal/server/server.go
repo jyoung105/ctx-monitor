@@ -81,7 +81,7 @@ func StartServer(opts ServerOpts, ctx context.Context) error {
 			html = fallbackHTML
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, html)
+		w.Write([]byte(html)) //nolint:errcheck
 	})
 
 	// GET /api/data — current context composition

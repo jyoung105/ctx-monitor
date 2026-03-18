@@ -643,7 +643,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
 
   // ── Helpers ──
   function fmt(n) {
-    if (n == null) return '\\u2014';
+    if (n == null) return '\u2014';
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
     if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
     return String(n);
@@ -688,10 +688,10 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
     var toolName = d.tool === 'codex' ? 'Codex' : 'Claude Code';
     document.getElementById('hLogo').textContent = d.tool === 'codex' ? 'X' : 'C';
     document.getElementById('hTitle').textContent = toolName;
-    document.getElementById('hModel').textContent = d.model || '\\u2014';
+    document.getElementById('hModel').textContent = d.model || '\u2014';
     document.getElementById('hModelBadge').textContent = '';
     document.getElementById('hWindow').textContent = fmt(d.contextWindowSize || 0);
-    document.getElementById('hSession').textContent = d.sessionId && d.sessionId !== 'unknown' ? d.sessionId.slice(0, 12) : '\\u2014';
+    document.getElementById('hSession').textContent = d.sessionId && d.sessionId !== 'unknown' ? d.sessionId.slice(0, 12) : '\u2014';
 
     document.title = 'ctx-monitor \u2014 ' + (d.sessionId && d.sessionId !== 'unknown' ? d.sessionId.slice(0, 12) : 'no session');
 
@@ -894,7 +894,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
       ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-tertiary');
       ctx.font = '14px Inter, system-ui, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('No tool calls recorded yet\\u2026', W / 2, H / 2);
+      ctx.fillText('No tool calls recorded yet\u2026', W / 2, H / 2);
       return;
     }
 
@@ -1004,7 +1004,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
         ctx.fillText('T' + (turnIdx + 1), x, pad.top + chartH + 12);
         // Short user message preview at top
         var turnText = sortedTurns[turnIdx].text || '';
-        if (turnText.length > 25) turnText = turnText.slice(0, 24) + '\\u2026';
+        if (turnText.length > 25) turnText = turnText.slice(0, 24) + '\u2026';
         ctx.font = '9px Inter, system-ui, sans-serif';
         ctx.fillText(turnText, x, pad.top - 5);
       }
@@ -1103,7 +1103,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
     // Bash: command
     if (name === 'bash') {
       var cmd = input.command || '';
-      return cmd.length > 60 ? cmd.slice(0, 60) + '\\u2026' : cmd;
+      return cmd.length > 60 ? cmd.slice(0, 60) + '\u2026' : cmd;
     }
 
     // Grep
@@ -1123,7 +1123,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
     if (name === 'agent' || name === 'task' || name === 'taskcreate' || name === 'sendmessage') {
       var parts2 = [];
       if (input.subagent_type) parts2.push(input.subagent_type);
-      if (input.description) parts2.push(input.description.length > 60 ? input.description.slice(0, 60) + '\\u2026' : input.description);
+      if (input.description) parts2.push(input.description.length > 60 ? input.description.slice(0, 60) + '\u2026' : input.description);
       return parts2.join(': ');
     }
 
@@ -1151,7 +1151,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
     // If still long, show last 3 segments
     var parts = fp.split('/');
     if (parts.length > 4) {
-      return '\\u2026/' + parts.slice(-3).join('/');
+      return '\u2026/' + parts.slice(-3).join('/');
     }
     return fp;
   }
@@ -1239,7 +1239,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
       var tokens = c.tokenEstimate || c.tokens || 0;
       var target = extractToolTarget(c);
       var output = c.output || c.preview || '';
-      var lines = String(output).split('\\n').slice(0, 3).join('\n');
+      var lines = String(output).split('\n').slice(0, 3).join('\n');
       var color = c.color || colorForTool(name);
 
       var card = document.createElement('div');
@@ -1448,7 +1448,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
             '<div class="git-node-branch"></div>' +
             '<div class="git-node-content">' +
               '<div class="git-node-title">' + escHtml(agentLabel) + '</div>' +
-              (agent.description ? '<div class="git-node-desc">' + escHtml(agent.description.length > 100 ? agent.description.slice(0, 100) + '\\u2026' : agent.description) + '</div>' : '') +
+              (agent.description ? '<div class="git-node-desc">' + escHtml(agent.description.length > 100 ? agent.description.slice(0, 100) + '\u2026' : agent.description) + '</div>' : '') +
               '<div class="git-node-time">' + (agent.timestamp ? formatRelativeTime(agent.timestamp) : '') + '</div>' +
               (agent.tokens ? '<div class="git-node-badge">' + fmt(agent.tokens) + ' tokens</div>' : '') +
             '</div>' +
@@ -1552,7 +1552,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
       var chip = document.createElement('div');
       chip.className = 'turn-chip' + (activeTurn === i ? ' active' : '');
       var text = turn.text || 'Turn ' + (i+1);
-      if (text.length > 30) text = text.slice(0, 29) + '\\u2026';
+      if (text.length > 30) text = text.slice(0, 29) + '\u2026';
       chip.innerHTML = '<span class="chip-num">' + (i+1) + '</span>' + escHtml(text);
       chip.addEventListener('click', function() {
         activeTurn = (activeTurn === i) ? null : i; // toggle
