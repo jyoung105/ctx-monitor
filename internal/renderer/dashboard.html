@@ -696,7 +696,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
     document.title = 'ctx-monitor \u2014 ' + (d.sessionId && d.sessionId !== 'unknown' ? d.sessionId.slice(0, 12) : 'no session');
 
     var pctEl = document.getElementById('hPct');
-    var pVal = d.totalUsedPct != null ? d.totalUsedPct : (d.apiMatchPct != null ? d.apiMatchPct : 0);
+    var pVal = d.apiMatchPct != null && d.apiMatchPct > 0 ? d.apiMatchPct : (d.totalUsedPct != null ? d.totalUsedPct : 0);
     pctEl.textContent = pVal.toFixed(1) + '%';
     pctEl.className = 'pct-big ' + pctClass(pVal);
   }
