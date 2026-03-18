@@ -1,8 +1,4 @@
-// HTML dashboard template for ctx-monitor --serve mode
-// Completely self-contained: inline CSS + inline JS, no external dependencies
-
-export function getHtmlTemplate() {
-  return `<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en" data-theme="claude">
 <head>
 <meta charset="UTF-8">
@@ -1151,7 +1147,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
   function shortenPath(fp) {
     if (!fp) return '';
     // Remove common home directory prefixes
-    fp = fp.replace(/^\\/Users\\/[^\\/]+\\//, '~/').replace(/^\\/home\\/[^\\/]+\\//, '~/');
+    fp = fp.replace(/^\/Users\/[^\/]+\//, '~/').replace(/^\/home\/[^\/]+\//, '~/');
     // If still long, show last 3 segments
     var parts = fp.split('/');
     if (parts.length > 4) {
@@ -1243,7 +1239,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
       var tokens = c.tokenEstimate || c.tokens || 0;
       var target = extractToolTarget(c);
       var output = c.output || c.preview || '';
-      var lines = String(output).split('\\n').slice(0, 3).join('\\n');
+      var lines = String(output).split('\\n').slice(0, 3).join('\n');
       var color = c.color || colorForTool(name);
 
       var card = document.createElement('div');
@@ -1556,7 +1552,7 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
       var chip = document.createElement('div');
       chip.className = 'turn-chip' + (activeTurn === i ? ' active' : '');
       var text = turn.text || 'Turn ' + (i+1);
-      if (text.length > 30) text = text.slice(0, 29) + '\u2026';
+      if (text.length > 30) text = text.slice(0, 29) + '\\u2026';
       chip.innerHTML = '<span class="chip-num">' + (i+1) + '</span>' + escHtml(text);
       chip.addEventListener('click', function() {
         activeTurn = (activeTurn === i) ? null : i; // toggle
@@ -1598,5 +1594,4 @@ node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
 })();
 </script>
 </body>
-</html>`;
-}
+</html>

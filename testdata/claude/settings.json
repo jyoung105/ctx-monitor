@@ -1,0 +1,7 @@
+{
+  "statusLine": "compact",
+  "permissions": ["Read", "Edit", "Bash"],
+  "hooks": {
+    "preToolUse": [{"command": "echo hook"}]
+  }
+}
