@@ -1,0 +1,1597 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="claude">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ctx-monitor</title>
+<style>
+/* ── Reset ── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Theme tokens ── */
+:root[data-theme="claude"] {
+  --brand-50: #FFF5F0; --brand-500: #D4603A; --brand-600: #B84A28; --brand-900: #4A1B0C;
+  --surface-0: #FFFFFF; --surface-1: #F8F7F5; --surface-2: #EEEDEB;
+  --surface-3: #E4E1DC; --surface-overlay: rgba(255, 255, 255, 0.7);
+  --text-primary: #252422; --text-secondary: #6B6862; --text-tertiary: #8A8780;
+  --border-default: #D8D6D2; --border-subtle: #EEEDEB;
+  --logo-filter: none;
+}
+:root[data-theme="codex"] {
+  --brand-50: #F0FDF4; --brand-500: #10A37F; --brand-600: #0D8A6A; --brand-900: #022C22;
+  --surface-0: #FFFFFF; --surface-1: #FAFAF9; --surface-2: #F5F5F4;
+  --surface-3: #E7E5E4; --surface-overlay: rgba(255, 255, 255, 0.7);
+  --text-primary: #292524; --text-secondary: #78716C; --text-tertiary: #A8A29E;
+  --border-default: #E7E5E4; --border-subtle: #F5F5F4;
+  --logo-filter: hue-rotate(140deg) saturate(1.2);
+}
+
+/* ── Dark mode ── */
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="claude"] {
+    --brand-50: #3D1A0A; --surface-0: #1A1917; --surface-1: #222120; --surface-2: #2C2B29;
+    --surface-3: #363330; --surface-overlay: rgba(34, 33, 32, 0.88);
+    --text-primary: #F0EEE9; --text-secondary: #A8A59E; --text-tertiary: #777470;
+    --border-default: #3D3B38; --border-subtle: #2C2B29;
+  }
+  :root[data-theme="codex"] {
+    --brand-50: #052E16; --surface-0: #1C1917; --surface-1: #231F1D; --surface-2: #2C2825;
+    --surface-3: #36302D; --surface-overlay: rgba(35, 31, 29, 0.88);
+    --text-primary: #F5F5F4; --text-secondary: #A8A29E; --text-tertiary: #78716C;
+    --border-default: #3D3835; --border-subtle: #2C2825;
+  }
+  :root.dark { /* explicit class override */ }
+  .card { box-shadow: 0 1px 3px rgba(0,0,0,0.4) !important; }
+}
+
+/* ── Typography ── */
+body {
+  font-family: "Inter", "SF Pro Display", -apple-system, system-ui, sans-serif;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+code, .mono {
+  font-family: "SF Mono", "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.875em;
+}
+
+/* ── Layout ── */
+.container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+@media (max-width: 640px) { .container { padding: 0 12px; } }
+
+/* ── Card ── */
+.card {
+  background: var(--surface-0);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+  padding: 24px;
+  margin-bottom: 16px;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 24px 0;
+}
+.header-left { display: flex; align-items: center; gap: 16px; }
+.header-logo {
+  width: 40px; height: 40px;
+  background: var(--brand-500);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 18px;
+}
+.header-title { font-size: 20px; font-weight: 700; color: var(--text-primary); }
+.header-meta { font-size: 13px; color: var(--text-secondary); }
+.header-meta span { margin-right: 16px; }
+.header-meta .label { color: var(--text-tertiary); }
+.header-right { text-align: right; }
+.pct-big {
+  font-size: 56px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -2px;
+  transition: color 0.3s ease;
+}
+.pct-big.green { color: #16A34A; }
+.pct-big.yellow { color: #CA8A04; }
+.pct-big.red { color: #DC2626; }
+.pct-label { font-size: 13px; color: var(--text-tertiary); font-weight: 500; margin-top: 2px; }
+
+@media (max-width: 640px) {
+  .header { flex-direction: column; align-items: flex-start; }
+  .pct-big { font-size: 40px; }
+}
+
+/* ── Stacked bar ── */
+.stacked-bar-wrap { margin-bottom: 16px; }
+.stacked-bar {
+  display: flex;
+  height: 48px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--surface-2);
+  position: relative;
+}
+.stacked-bar .seg {
+  height: 100%;
+  transition: width 0.4s ease;
+  position: relative;
+  cursor: pointer;
+  min-width: 0;
+}
+.stacked-bar .seg:first-child { border-radius: 8px 0 0 8px; }
+.stacked-bar .seg:last-child { border-radius: 0 8px 8px 0; }
+.seg-tooltip {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text-primary);
+  color: var(--surface-0);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.seg-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--text-primary);
+}
+.seg:hover .seg-tooltip { display: block; }
+
+/* ── Legend ── */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  margin-top: 12px;
+}
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Shared scrollbar styling ── */
+.tabs, .tool-list, .tool-preview, .turn-filter-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--surface-3) transparent;
+}
+.tabs::-webkit-scrollbar, .tool-list::-webkit-scrollbar, .tool-preview::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.turn-filter-scroll::-webkit-scrollbar {
+  width: 10px;
+  height: 8px;
+}
+.tabs::-webkit-scrollbar-track, .tool-list::-webkit-scrollbar-track, .tool-preview::-webkit-scrollbar-track, .turn-filter-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.tabs::-webkit-scrollbar-thumb, .tool-list::-webkit-scrollbar-thumb, .tool-preview::-webkit-scrollbar-thumb {
+  background: var(--surface-3);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.turn-filter-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(90deg, var(--brand-500), var(--brand-600));
+  border-radius: 999px;
+}
+
+/* ── Tabs ── */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border-default);
+  margin-bottom: 20px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.tab-btn {
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+}
+.tab-btn:hover { color: var(--text-primary); background: var(--surface-overlay); }
+.tab-btn.active { color: var(--brand-500); border-bottom-color: var(--brand-500); background: linear-gradient(180deg, var(--surface-overlay), transparent); }
+.tab-panel { display: none; animation: fadeIn 0.2s ease; }
+.tab-panel.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+/* ── Components table ── */
+.comp-table { width: 100%; border-collapse: collapse; }
+.comp-table th {
+  text-align: left; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-tertiary); padding: 8px 12px;
+  border-bottom: 1px solid var(--border-default);
+}
+.comp-table td { padding: 12px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+.comp-table tr:last-child td { border-bottom: none; }
+.comp-row-label { display: flex; align-items: center; gap: 10px; }
+.comp-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+.comp-name { font-weight: 500; font-size: 14px; }
+.comp-tokens { font-family: "SF Mono","JetBrains Mono",monospace; font-size: 13px; color: var(--text-secondary); }
+.comp-pct { font-family: "SF Mono","JetBrains Mono",monospace; font-size: 13px; font-weight: 600; }
+.comp-minibar { width: 100%; max-width: 120px; height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.comp-minibar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+
+.free-space-row td { background: var(--surface-1); }
+
+/* ── Timeline ── */
+.timeline-wrap { position: relative; }
+.timeline-canvas { width: 100%; height: 300px; display: block; border-radius: 8px; }
+.timeline-legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; }
+.timeline-hover-info {
+  display: none; position: absolute; top: 8px; right: 8px;
+  background: var(--surface-0); border: 1px solid var(--border-default);
+  border-radius: 8px; padding: 10px 14px; font-size: 12px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 260px;
+}
+.timeline-hover-info.visible { display: block; }
+.compaction-marker { font-size: 11px; color: var(--text-tertiary); font-weight: 600; }
+
+/* ── Tool calls ── */
+.tool-agg-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+.tool-agg-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 8px;
+  background: var(--surface-2); font-size: 13px; font-weight: 500;
+}
+.tool-agg-count { font-family: "SF Mono",monospace; font-weight: 700; color: var(--brand-500); }
+.tool-agg-tokens { font-family: "SF Mono",monospace; font-size: 11px; color: var(--text-tertiary); margin-left: 4px; }
+.tool-list { max-height: 600px; overflow-y: auto; }
+.tool-card {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 14px 0; border-bottom: 1px solid var(--border-subtle);
+}
+.tool-card:last-child { border-bottom: none; }
+.tool-icon {
+  width: 36px; height: 36px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 15px; color: #fff; flex-shrink: 0;
+}
+.tool-info { flex: 1; min-width: 0; }
+.tool-name { font-weight: 600; font-size: 14px; }
+.tool-target { font-size: 12px; color: var(--text-tertiary); word-break: break-all; }
+.tool-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 11px; font-weight: 600; font-family: "SF Mono",monospace;
+  margin-top: 4px;
+}
+.tool-badge.gray { background: var(--surface-2); color: var(--text-secondary); }
+.tool-badge.yellow { background: #FEF9C3; color: #854D0E; }
+.tool-badge.red { background: #FEE2E2; color: #991B1B; }
+@media (prefers-color-scheme: dark) {
+  .tool-badge.yellow { background: #422006; color: #FDE68A; }
+  .tool-badge.red { background: #450A0A; color: #FCA5A5; }
+}
+.tool-preview {
+  margin-top: 6px; font-size: 12px; color: var(--text-tertiary);
+  background: var(--surface-1); border-radius: 6px; padding: 8px 10px;
+  display: none; white-space: pre-wrap; word-break: break-all;
+  font-family: "SF Mono","JetBrains Mono",monospace; max-height: 120px; overflow-y: auto;
+}
+.tool-preview.open { display: block; }
+.tool-toggle {
+  font-size: 11px; color: var(--brand-500); cursor: pointer;
+  background: none; border: none; margin-top: 4px; font-weight: 500;
+}
+.tool-toggle:hover { text-decoration: underline; }
+
+/* ── Git graph (Agents) ── */
+.git-graph { position: relative; padding-left: 40px; }
+.git-node { position: relative; padding: 12px 0 12px 24px; }
+.git-node::before { content: ''; position: absolute; left: -40px; top: 0; bottom: 0; width: 2px; background: var(--border-default); }
+.git-node-dot { position: absolute; left: -47px; top: 18px; width: 16px; height: 16px; border-radius: 50%; border: 3px solid var(--surface-0); z-index: 1; }
+.git-node-branch { position: absolute; left: -32px; top: 26px; width: 24px; height: 2px; }
+.git-node:first-child::before { top: 18px; }
+.git-node:last-child::before { bottom: calc(100% - 26px); }
+.git-node-content {
+  padding: 10px 16px;
+  background: linear-gradient(180deg, var(--surface-overlay), rgba(0, 0, 0, 0));
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  backdrop-filter: blur(10px);
+}
+.git-node-title { font-weight: 600; font-size: 14px; }
+.git-node-desc { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+.git-node-time { font-size: 11px; color: var(--text-tertiary); font-family: "SF Mono",monospace; margin-top: 4px; }
+.git-node-badge { display: inline-block; margin-top: 6px; padding: 2px 8px; border-radius: 6px; background: var(--surface-2); font-size: 11px; font-weight: 600; font-family: "SF Mono",monospace; }
+.git-node.main-node .git-node-dot { background: var(--brand-500); }
+.git-node.main-node .git-node-content { border-color: var(--brand-500); }
+.git-node.agent-node .git-node-dot { background: #378ADD; }
+.git-node.agent-node .git-node-branch { background: #378ADD; }
+.git-node.return-node .git-node-dot { background: var(--text-tertiary); width: 10px; height: 10px; left: -44px; top: 21px; }
+.git-node.return-node .git-node-branch { background: var(--text-tertiary); }
+.git-node.return-node .git-node-content { background: transparent; border: 1px dashed var(--border-default); }
+.agents-empty { color: var(--text-tertiary); font-size: 14px; padding: 24px 0; text-align: center; }
+
+/* ── Setup ── */
+.setup-section { margin-bottom: 24px; }
+.setup-section h3 { font-size: 15px; font-weight: 700; margin-bottom: 8px; }
+.setup-section p { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; }
+.setup-code {
+  background: var(--surface-1); border: 1px solid var(--border-subtle);
+  border-radius: 8px; padding: 14px 16px; overflow-x: auto;
+  font-family: "SF Mono","JetBrains Mono",monospace; font-size: 13px;
+  line-height: 1.6; color: var(--text-primary);
+}
+.setup-code .comment { color: var(--text-tertiary); }
+
+/* ── Utilities ── */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+.refresh-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: #16A34A; margin-right: 6px; animation: pulse 3s infinite;
+}
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+.status-bar {
+  display: flex; align-items: center; justify-content: space-between;
+  font-size: 12px; color: var(--text-tertiary); padding: 8px 0;
+}
+.empty-state { text-align: center; padding: 40px 20px; color: var(--text-tertiary); }
+.empty-state-icon { font-size: 32px; margin-bottom: 8px; opacity: 0.4; }
+.empty-state-text { font-size: 14px; }
+
+/* ── Turn dividers ── */
+.turn-divider {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 0; margin: 4px 0;
+  font-size: 12px; font-weight: 600; color: var(--brand-500);
+}
+.turn-divider::before, .turn-divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--brand-500); opacity: 0.3;
+}
+.turn-divider .turn-label {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 12px;
+  background: var(--brand-50); white-space: nowrap; max-width: 400px; overflow: hidden; text-overflow: ellipsis;
+}
+.turn-divider .turn-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--brand-500); color: #fff; font-size: 10px; font-weight: 700; flex-shrink: 0;
+}
+.turn-attach { font-size: 11px; color: var(--text-tertiary); font-weight: 400; }
+.turn-filter-bar {
+  padding: 10px 0 14px; margin-bottom: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.turn-filter-scroll {
+  display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 10px;
+  -webkit-overflow-scrolling: touch; scrollbar-width: thin;
+}
+.turn-chip {
+  display: flex; align-items: center; gap: 4px;
+  padding: 7px 12px; border-radius: 999px;
+  background: linear-gradient(180deg, var(--surface-overlay), var(--surface-2));
+  border: 1px solid transparent;
+  font-size: 12px; color: var(--text-secondary); cursor: pointer;
+  white-space: nowrap; flex-shrink: 0;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.08);
+  transition: all 0.2s ease;
+}
+.turn-chip:hover {
+  border-color: var(--brand-500);
+  color: var(--text-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
+}
+.turn-chip.active {
+  background: linear-gradient(180deg, var(--brand-50), var(--surface-overlay));
+  border-color: var(--brand-500);
+  color: var(--brand-500);
+  font-weight: 600;
+}
+.turn-chip .chip-num {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--text-tertiary); color: var(--surface-0);
+  font-size: 10px; font-weight: 700;
+}
+.turn-chip.active .chip-num { background: var(--brand-500); }
+.turn-chip-all { font-weight: 600; }
+
+/* ── Session select ── */
+.session-select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+}
+.session-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 180px;
+  padding: 7px 36px 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-default);
+  background: linear-gradient(180deg, var(--surface-overlay), var(--surface-0));
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1.2;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08);
+}
+.session-select:hover { border-color: var(--brand-500); }
+.session-select:focus {
+  outline: none;
+  border-color: var(--brand-500);
+  box-shadow: 0 0 0 2px var(--surface-0), 0 0 0 4px var(--brand-500);
+}
+.session-select-caret {
+  position: absolute;
+  right: 12px;
+  pointer-events: none;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+.agents-panel {
+  background:
+    radial-gradient(circle at top left, rgba(55, 138, 221, 0.1), transparent 32%),
+    radial-gradient(circle at bottom right, rgba(212, 96, 58, 0.1), transparent 28%),
+    transparent;
+  border: 1px solid var(--border-subtle);
+  box-shadow: none;
+}
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="header-left">
+      <div class="header-logo" id="hLogo">C</div>
+      <div>
+        <div class="header-title" id="hTitle">ctx-monitor</div>
+        <div class="header-meta">
+          <span><span class="label">Model </span><strong id="hModel">&mdash;</strong> <span id="hModelBadge" style="display:none;"></span></span>
+          <span><span class="label">Window </span><strong id="hWindow">&mdash;</strong></span>
+          <span><span class="label">Session </span><code id="hSession">&mdash;</code>
+            <span class="session-select-wrap">
+              <select id="hSessionSelect" class="session-select">
+                <option value="">Current session</option>
+              </select>
+              <span class="session-select-caret" aria-hidden="true">&#9662;</span>
+            </span>
+          </span>
+        </div>
+      </div>
+    </div>
+    <div class="header-right">
+      <div class="pct-big green" id="hPct">&mdash;</div>
+      <div class="pct-label">context used</div>
+    </div>
+  </header>
+
+  <!-- Stacked bar -->
+  <div class="stacked-bar-wrap card" style="padding:16px 20px;">
+    <div class="stacked-bar" id="stackedBar"></div>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs" role="tablist">
+    <button class="tab-btn active" data-tab="components" role="tab">Components</button>
+    <button class="tab-btn" data-tab="timeline" role="tab">Timeline</button>
+    <button class="tab-btn" data-tab="tools" role="tab">Tool Calls</button>
+    <button class="tab-btn" data-tab="agents" role="tab">Agents</button>
+    <button class="tab-btn" data-tab="setup" role="tab">Setup</button>
+  </div>
+
+  <!-- Turn filter -->
+  <div class="turn-filter-bar" id="turnFilterBar" style="display:none;">
+    <div class="turn-filter-scroll" id="turnFilterScroll"></div>
+  </div>
+
+  <!-- Components -->
+  <div class="tab-panel active" id="panel-components">
+    <div class="card" style="padding:0; overflow-x:auto;">
+      <table class="comp-table">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Tokens</th>
+            <th style="width:80px">%</th>
+            <th style="width:130px">Bar</th>
+          </tr>
+        </thead>
+        <tbody id="compBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Timeline -->
+  <div class="tab-panel" id="panel-timeline">
+    <div class="card">
+      <div class="timeline-wrap">
+        <canvas class="timeline-canvas" id="timelineCanvas"></canvas>
+        <div class="timeline-hover-info" id="timelineHover"></div>
+      </div>
+      <div class="timeline-legend" id="timelineLegend"></div>
+    </div>
+  </div>
+
+  <!-- Tool Calls -->
+  <div class="tab-panel" id="panel-tools">
+    <div class="card">
+      <div class="tool-agg-bar" id="toolAgg"></div>
+      <div class="tool-list" id="toolList"></div>
+      <div class="empty-state" id="toolEmpty" style="display:none;">
+        <div class="empty-state-icon">&#128295;</div>
+        <div class="empty-state-text">No tool calls recorded yet</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Agents -->
+  <div class="tab-panel" id="panel-agents">
+    <div class="card agents-panel">
+      <div id="agentsGraph"></div>
+      <div class="agents-empty" id="agentsEmpty" style="display:none;">No subagents in this session</div>
+    </div>
+  </div>
+
+  <!-- Setup -->
+  <div class="tab-panel" id="panel-setup">
+    <div class="card">
+      <div class="setup-section">
+        <h3>Claude Code Statusline</h3>
+        <p>Add to your <code>~/.claude/settings.json</code> to show context usage in your statusline:</p>
+        <pre class="setup-code">{
+  "statusLine": {
+    "type": "command",
+    "command": "node /path/to/ctx-monitor/bin/statusline-bridge.mjs"
+  }
+}</pre>
+      </div>
+
+      <div class="setup-section">
+        <h3>Claude Code Hook</h3>
+        <p>Add a PostToolUse hook to <code>~/.claude/settings.json</code> for live tracking:</p>
+        <pre class="setup-code">{
+  "hooks": {
+    "PostToolUse": [{
+      "type": "command",
+      "command": "node /path/to/ctx-monitor/bin/ctx-monitor.mjs --statusline --compact"
+    }]
+  }
+}</pre>
+      </div>
+
+      <div class="setup-section">
+        <h3>Codex CLI tmux</h3>
+        <p>Run Codex CLI alongside ctx-monitor in a tmux split:</p>
+        <pre class="setup-code"><span class="comment"># Launch Codex + ctx-monitor side by side</span>
+tmux new-session -d -s work "codex" \\
+  split-window -h "node /path/to/ctx-monitor/bin/ctx-monitor.mjs --codex --watch 3" \\
+  select-pane -t 0</pre>
+      </div>
+
+      <div class="setup-section">
+        <h3>SKILL Setup (Claude Code Plugin)</h3>
+        <p>Create a ctx-monitor skill so Claude Code can show context usage on demand:</p>
+        <pre class="setup-code"><span class="comment"># Create skill directory</span>
+mkdir -p ~/.claude/skills/ctx-monitor
+
+<span class="comment"># Create SKILL.md</span>
+cat > ~/.claude/skills/ctx-monitor/SKILL.md &lt;&lt; 'EOF'
+---
+name: ctx-monitor
+description: Show context window composition breakdown
+trigger: "context monitor|ctx monitor|show context|context usage"
+allowed-tools: ["Bash"]
+---
+
+Run \`node /path/to/ctx-monitor/bin/ctx-monitor.mjs --claude --compact\`
+to show a quick context composition summary, or
+\`node /path/to/ctx-monitor/bin/ctx-monitor.mjs --claude --table\`
+for detailed breakdown.
+EOF</pre>
+      </div>
+
+      <div class="setup-section">
+        <h3>Web Dashboard</h3>
+        <p>Start the live dashboard server (auto-refreshes every 3 seconds):</p>
+        <pre class="setup-code"><span class="comment"># Start the web dashboard</span>
+node /path/to/ctx-monitor/bin/ctx-monitor.mjs --serve
+<span class="comment"># Opens http://localhost:3456</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div class="status-bar">
+    <span><span class="refresh-dot"></span>Live &mdash; refreshes every 3s</span>
+    <span id="lastUpdate">&mdash;</span>
+  </div>
+
+</div>
+
+<script>
+(function() {
+  "use strict";
+
+  // ── State ──
+  var DATA = null;
+
+  // ── Helpers ──
+  function fmt(n) {
+    if (n == null) return '\u2014';
+    if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+    if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+    return String(n);
+  }
+
+  function pctClass(p) {
+    if (p < 50) return 'green';
+    if (p < 75) return 'yellow';
+    return 'red';
+  }
+
+  function tokenBadgeClass(t) {
+    if (t > 5000) return 'red';
+    if (t >= 1000) return 'yellow';
+    return 'gray';
+  }
+
+  function escHtml(s) {
+    if (!s) return '';
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  // ── Theme ──
+  function applyTheme(tool) {
+    document.documentElement.setAttribute('data-theme', tool === 'codex' ? 'codex' : 'claude');
+  }
+
+  // ── Tabs ──
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+      document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+      btn.classList.add('active');
+      var panel = document.getElementById('panel-' + btn.getAttribute('data-tab'));
+      if (panel) panel.classList.add('active');
+      if (btn.getAttribute('data-tab') === 'timeline') renderTimeline();
+    });
+  });
+
+  // ── Header ──
+  function renderHeader(d) {
+    var toolName = d.tool === 'codex' ? 'Codex' : 'Claude Code';
+    document.getElementById('hLogo').textContent = d.tool === 'codex' ? 'X' : 'C';
+    document.getElementById('hTitle').textContent = toolName;
+    document.getElementById('hModel').textContent = d.model || '\u2014';
+    document.getElementById('hModelBadge').textContent = '';
+    document.getElementById('hWindow').textContent = fmt(d.contextWindowSize || 0);
+    document.getElementById('hSession').textContent = d.sessionId && d.sessionId !== 'unknown' ? d.sessionId.slice(0, 12) : '\u2014';
+
+    document.title = 'ctx-monitor \u2014 ' + (d.sessionId && d.sessionId !== 'unknown' ? d.sessionId.slice(0, 12) : 'no session');
+
+    var pctEl = document.getElementById('hPct');
+    var pVal = d.apiMatchPct != null && d.apiMatchPct > 0 ? d.apiMatchPct : (d.totalUsedPct != null ? d.totalUsedPct : 0);
+    pctEl.textContent = pVal.toFixed(1) + '%';
+    pctEl.className = 'pct-big ' + pctClass(pVal);
+  }
+
+  // ── Stacked bar ──
+  function renderBar(d) {
+    var bar = document.getElementById('stackedBar');
+    var legend = document.getElementById('legend');
+    bar.innerHTML = '';
+    legend.innerHTML = '';
+
+    var comps = (d.components || []).filter(function(c) { return c.pct > 0; });
+    var hasExplicitFree = comps.some(function(c) { return c.key === 'free'; });
+    // Add implicit free space only for compositions that do not include it explicitly.
+    var freePct = 100 - (d.totalUsedPct || 0);
+    if (!hasExplicitFree && freePct > 0) {
+      comps.push({ key: 'free', label: 'Free space', tokens: d.freeTokens || 0, pct: freePct, color: 'transparent' });
+    }
+
+    comps.forEach(function(c) {
+      var seg = document.createElement('div');
+      seg.className = 'seg';
+      seg.style.width = c.pct + '%';
+      seg.style.background = c.color;
+
+      var tip = document.createElement('div');
+      tip.className = 'seg-tooltip';
+      tip.textContent = c.label + ': ' + fmt(c.tokens) + ' (' + c.pct.toFixed(1) + '%)';
+      seg.appendChild(tip);
+      bar.appendChild(seg);
+    });
+
+    // Legend (all components including zero-value from original data)
+    (d.components || []).forEach(function(c) {
+      var item = document.createElement('div');
+      item.className = 'legend-item';
+      item.innerHTML = '<span class="legend-dot" style="background:' + c.color + '"></span>' + escHtml(c.label);
+      legend.appendChild(item);
+    });
+  }
+
+  // ── Components table ──
+  function renderComponents(d) {
+    var body = document.getElementById('compBody');
+    body.innerHTML = '';
+    var comps = d.components || [];
+    var ctxSize = d.contextWindowSize || 200000;
+    var hasExplicitFree = comps.some(function(c) { return c.key === 'free'; });
+
+    var totalUsed = 0;
+    comps.forEach(function(c) {
+      if (c.key !== 'free') totalUsed += c.tokens;
+    });
+    var freeTokens = Math.max(0, ctxSize - totalUsed);
+    var freePct = (freeTokens / ctxSize) * 100;
+
+    comps.forEach(function(c) {
+      var pct = (c.tokens / ctxSize) * 100;
+      var tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><div class="comp-row-label"><span class="comp-dot" style="background:' + c.color + '"></span><span class="comp-name">' + escHtml(c.label) + '</span></div></td>' +
+        '<td class="comp-tokens">' + fmt(c.tokens) + '</td>' +
+        '<td class="comp-pct">' + pct.toFixed(1) + '%</td>' +
+        '<td><div class="comp-minibar"><div class="comp-minibar-fill" style="width:' + Math.min(pct * 2, 100) + '%;background:' + c.color + '"></div></div></td>';
+      body.appendChild(tr);
+    });
+
+    if (!hasExplicitFree) {
+      var ftr = document.createElement('tr');
+      ftr.className = 'free-space-row';
+      ftr.innerHTML =
+        '<td><div class="comp-row-label"><span class="comp-dot" style="background:#E8E6DF"></span><span class="comp-name">Free space</span></div></td>' +
+        '<td class="comp-tokens">' + fmt(freeTokens) + '</td>' +
+        '<td class="comp-pct">' + freePct.toFixed(1) + '%</td>' +
+        '<td><div class="comp-minibar"><div class="comp-minibar-fill" style="width:' + Math.min(freePct * 2, 100) + '%;background:#E8E6DF"></div></div></td>';
+      body.appendChild(ftr);
+    }
+  }
+
+  // ── Timeline (canvas) — stacked area chart of context composition over time ──
+  function renderTimeline() {
+    var canvas = document.getElementById('timelineCanvas');
+    if (!canvas || !DATA) return;
+    var ctx = canvas.getContext('2d');
+    var rect = canvas.parentElement.getBoundingClientRect();
+    var dpr = window.devicePixelRatio || 1;
+    canvas.width = rect.width * dpr;
+    canvas.height = 360 * dpr;
+    canvas.style.width = rect.width + 'px';
+    canvas.style.height = '360px';
+    ctx.scale(dpr, dpr);
+
+    var W = rect.width;
+    var H = 360;
+    var pad = { top: 20, right: 20, bottom: 44, left: 66 };
+    var chartW = W - pad.left - pad.right;
+    var chartH = H - pad.top - pad.bottom;
+
+    ctx.clearRect(0, 0, W, H);
+
+    var ctxWindowSize = DATA.contextWindowSize || 200000;
+    var comps = DATA.components || [];
+    var calls = (DATA.toolCalls || []).filter(function(c) { return c.timestamp; });
+
+    // ── Build component layers ──
+    // Fixed/config components (always present from start)
+    var fixedKeys = {};
+    var configKeys = {};
+    var dynamicKeys = { user_msg: 1, tool_results: 1, responses: 1, subagent: 1, skill_body: 1, plan: 1 };
+    comps.forEach(function(c) {
+      if (c.key === 'free') return;
+      if (c.fixed) fixedKeys[c.key] = c.tokens;
+      else if (!dynamicKeys[c.key]) configKeys[c.key] = c.tokens;
+    });
+
+    // Classify tool calls into buckets
+    function classifyCall(c) {
+      var n = c.name || '';
+      if (n === 'Skill') return 'skill_body';
+      if (n === 'Agent' || n === 'Task' || n === 'Explore' || n === 'Plan' || n === 'SendMessage' || n === 'TaskCreate') return 'subagent';
+      if (n === 'TodoRead' || n === 'TodoWrite') return 'plan';
+      return 'tool_results'; // Read, Write, Edit, Bash, Grep, Glob, etc.
+    }
+
+    // Sort calls by time
+    calls.sort(function(a, b) { return new Date(a.timestamp) - new Date(b.timestamp); });
+
+    // Build snapshots: one per tool call, showing cumulative per-bucket tokens
+    var bucketAccum = { user_msg: 0, tool_results: 0, responses: 0, subagent: 0, skill_body: 0, plan: 0 };
+    var fixedTotal = 0; Object.keys(fixedKeys).forEach(function(k) { fixedTotal += fixedKeys[k]; });
+    var configTotal = 0; Object.keys(configKeys).forEach(function(k) { configTotal += configKeys[k]; });
+    var baseline = fixedTotal + configTotal;
+
+    // Layer order (bottom to top): fixed, config components, then dynamic
+    var layers = [];
+    // Fixed layers
+    comps.forEach(function(c) {
+      if (c.key !== 'free' && c.fixed) layers.push({ key: c.key, label: c.label, color: c.color });
+    });
+    // Config layers
+    comps.forEach(function(c) {
+      if (c.key !== 'free' && !c.fixed && !dynamicKeys[c.key] && c.tokens > 0) {
+        layers.push({ key: c.key, label: c.label, color: c.color });
+      }
+    });
+    // Dynamic layers
+    ['user_msg', 'tool_results', 'responses', 'subagent', 'skill_body', 'plan'].forEach(function(k) {
+      var c = comps.find(function(cc) { return cc.key === k; });
+      if (c) layers.push({ key: k, label: c.label, color: c.color });
+    });
+
+    // Build snapshots array — initial state + one per tool call
+    var snapshots = [];
+
+    // Initial snapshot: just fixed + config
+    var initSnap = { time: calls.length > 0 ? new Date(calls[0].timestamp).getTime() - 1000 : Date.now() - 60000 };
+    layers.forEach(function(l) {
+      if (fixedKeys[l.key] != null) initSnap[l.key] = fixedKeys[l.key];
+      else if (configKeys[l.key] != null) initSnap[l.key] = configKeys[l.key];
+      else initSnap[l.key] = 0;
+    });
+    initSnap._total = baseline;
+    initSnap._label = 'Session start';
+    snapshots.push(initSnap);
+
+    // Estimate user message tokens growing: distribute evenly across tool calls
+    var totalUserMsg = 0;
+    var totalResponses = 0;
+    comps.forEach(function(c) {
+      if (c.key === 'user_msg') totalUserMsg = c.tokens;
+      if (c.key === 'responses') totalResponses = c.tokens;
+    });
+    var userMsgPer = calls.length > 0 ? totalUserMsg / calls.length : 0;
+    var responsesPer = calls.length > 0 ? totalResponses / calls.length : 0;
+
+    calls.forEach(function(c, i) {
+      var bucket = classifyCall(c);
+      bucketAccum[bucket] += (c.tokenEstimate || 0);
+      bucketAccum.user_msg = Math.round(userMsgPer * (i + 1));
+      bucketAccum.responses = Math.round(responsesPer * (i + 1));
+
+      var snap = { time: new Date(c.timestamp).getTime() };
+      var total = 0;
+      layers.forEach(function(l) {
+        if (fixedKeys[l.key] != null) { snap[l.key] = fixedKeys[l.key]; total += fixedKeys[l.key]; }
+        else if (configKeys[l.key] != null) { snap[l.key] = configKeys[l.key]; total += configKeys[l.key]; }
+        else { snap[l.key] = bucketAccum[l.key] || 0; total += bucketAccum[l.key] || 0; }
+      });
+      snap._total = total;
+      snap._label = (c.name || 'unknown') + (c.filePath ? ' ' + c.filePath.split('/').pop() : '');
+      snapshots.push(snap);
+    });
+
+    if (snapshots.length < 2) {
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-tertiary');
+      ctx.font = '14px Inter, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('No tool calls recorded yet\u2026', W / 2, H / 2);
+      return;
+    }
+
+    // Index-based X-axis (evenly spaced, no time gaps)
+    var n = snapshots.length;
+
+    var maxTotal = 0;
+    snapshots.forEach(function(s) { if (s._total > maxTotal) maxTotal = s._total; });
+    var maxY = Math.max(ctxWindowSize * 1.08, maxTotal * 1.12);
+
+    function toX(idx) { return pad.left + (idx / Math.max(1, n - 1)) * chartW; }
+    function toY(v) { return pad.top + chartH - (v / maxY) * chartH; }
+
+    // Build turn-to-snapshot-index mapping
+    var turns = DATA.turns || [];
+    var sortedTurns = turns.slice().sort(function(a, b) {
+      return new Date(a.timestamp || 0) - new Date(b.timestamp || 0);
+    });
+    // For each snapshot, find which turn it belongs to
+    function findTurnForSnap(snapTime) {
+      if (!snapTime || sortedTurns.length === 0) return -1;
+      var idx = -1;
+      for (var i = 0; i < sortedTurns.length; i++) {
+        if (new Date(sortedTurns[i].timestamp).getTime() <= snapTime) idx = i; else break;
+      }
+      return idx;
+    }
+
+    // ── Danger zone band (above 75%) ──
+    var dangerY = ctxWindowSize * 0.75;
+    ctx.fillStyle = 'rgba(220, 38, 38, 0.05)';
+    ctx.fillRect(pad.left, toY(ctxWindowSize), chartW, toY(dangerY) - toY(ctxWindowSize));
+
+    // ── Grid lines ──
+    var gridColor = getComputedStyle(document.documentElement).getPropertyValue('--border-subtle') || '#2C2B29';
+    var textColor = getComputedStyle(document.documentElement).getPropertyValue('--text-tertiary') || '#777';
+    ctx.font = '11px "SF Mono", monospace';
+    ctx.textAlign = 'right';
+    for (var g = 0; g <= 4; g++) {
+      var val = (maxY / 4) * g;
+      var gy = toY(val);
+      ctx.fillStyle = textColor;
+      ctx.fillText(fmt(Math.round(val)), pad.left - 8, gy + 4);
+      ctx.beginPath(); ctx.strokeStyle = gridColor; ctx.lineWidth = 0.5;
+      ctx.moveTo(pad.left, gy); ctx.lineTo(pad.left + chartW, gy); ctx.stroke();
+    }
+
+    // ── Draw stacked areas (bottom to top) ──
+    for (var li = 0; li < layers.length; li++) {
+      var layer = layers[li];
+      ctx.beginPath();
+      // Forward pass: top edge (cumulative up to this layer)
+      for (var si = 0; si < snapshots.length; si++) {
+        var cumul = 0;
+        for (var lj = 0; lj <= li; lj++) { cumul += (snapshots[si][layers[lj].key] || 0); }
+        var x = toX(si);
+        var y = toY(cumul);
+        if (si === 0) ctx.moveTo(x, y);
+        else { ctx.lineTo(x, y); }
+      }
+      // Backward pass: bottom edge (cumulative up to layer below)
+      for (var si2 = snapshots.length - 1; si2 >= 0; si2--) {
+        var cumulBelow = 0;
+        for (var lj2 = 0; lj2 < li; lj2++) { cumulBelow += (snapshots[si2][layers[lj2].key] || 0); }
+        ctx.lineTo(toX(si2), toY(cumulBelow));
+      }
+      ctx.closePath();
+      ctx.fillStyle = layer.color;
+      ctx.globalAlpha = 0.8;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // ── Total line on top ──
+    ctx.beginPath();
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-primary') || '#fff';
+    ctx.lineWidth = 1.5;
+    snapshots.forEach(function(s, i) {
+      var x = toX(i); var y = toY(s._total);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // ── Context window limit line ──
+    ctx.beginPath(); ctx.strokeStyle = '#DC2626'; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
+    ctx.moveTo(pad.left, toY(ctxWindowSize)); ctx.lineTo(pad.left + chartW, toY(ctxWindowSize));
+    ctx.stroke(); ctx.setLineDash([]);
+
+    // ── 75% warning line ──
+    ctx.beginPath(); ctx.strokeStyle = '#CA8A04'; ctx.lineWidth = 1; ctx.setLineDash([4, 3]);
+    ctx.moveTo(pad.left, toY(dangerY)); ctx.lineTo(pad.left + chartW, toY(dangerY));
+    ctx.stroke(); ctx.setLineDash([]);
+
+    // ── Turn markers (vertical lines at user message boundaries) ──
+    // Find snapshot index for each turn
+    var lastTurnIdx = -1;
+    for (var si3 = 0; si3 < snapshots.length; si3++) {
+      var turnIdx = findTurnForSnap(snapshots[si3].time);
+      if (turnIdx >= 0 && turnIdx !== lastTurnIdx) {
+        lastTurnIdx = turnIdx;
+        var x = toX(si3);
+        // Vertical dashed line
+        ctx.beginPath(); ctx.strokeStyle = SPEC_COLORS.user_msg; ctx.lineWidth = 1; ctx.setLineDash([2, 4]);
+        ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + chartH); ctx.stroke(); ctx.setLineDash([]);
+        // Turn number label at bottom
+        ctx.fillStyle = SPEC_COLORS.user_msg; ctx.font = 'bold 10px "SF Mono", monospace'; ctx.textAlign = 'center';
+        ctx.fillText('T' + (turnIdx + 1), x, pad.top + chartH + 12);
+        // Short user message preview at top
+        var turnText = sortedTurns[turnIdx].text || '';
+        if (turnText.length > 25) turnText = turnText.slice(0, 24) + '\u2026';
+        ctx.font = '9px Inter, system-ui, sans-serif';
+        ctx.fillText(turnText, x, pad.top - 5);
+      }
+    }
+
+    // ── Compaction markers ──
+    if (DATA.compactionEvents) {
+      DATA.compactionEvents.forEach(function(ev) {
+        var evTime = new Date(ev.timestamp).getTime();
+        // Find nearest snapshot index
+        var bestIdx = -1; var bestDist = Infinity;
+        for (var ci = 0; ci < snapshots.length; ci++) {
+          var d = Math.abs(snapshots[ci].time - evTime);
+          if (d < bestDist) { bestDist = d; bestIdx = ci; }
+        }
+        if (bestIdx < 0) return;
+        var x = toX(bestIdx);
+        ctx.beginPath(); ctx.strokeStyle = '#DC2626'; ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+        ctx.moveTo(x, pad.top); ctx.lineTo(x, pad.top + chartH); ctx.stroke(); ctx.setLineDash([]);
+        ctx.fillStyle = '#DC2626'; ctx.font = '10px "SF Mono", monospace'; ctx.textAlign = 'center';
+        ctx.fillText('compaction', x, pad.top - 4);
+      });
+    }
+
+    // ── X-axis: event count labels ──
+    ctx.textAlign = 'center'; ctx.fillStyle = textColor; ctx.font = '11px "SF Mono", monospace';
+    var numLabels = Math.min(8, snapshots.length);
+    var labelStep = Math.max(1, Math.floor(snapshots.length / numLabels));
+    for (var xi = 0; xi < snapshots.length; xi += labelStep) {
+      var xp = toX(xi);
+      ctx.fillText('#' + xi, xp, H - 10);
+    }
+
+    // ── Current total label on the right ──
+    var lastSnap = snapshots[snapshots.length - 1];
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--text-primary') || '#fff';
+    ctx.font = 'bold 12px "SF Mono", monospace'; ctx.textAlign = 'right';
+    ctx.fillText(fmt(lastSnap._total) + ' (' + ((lastSnap._total / ctxWindowSize) * 100).toFixed(1) + '%)', pad.left + chartW - 4, toY(lastSnap._total) - 6);
+
+    // ── Hover ──
+    canvas.onmousemove = function(e) {
+      var bRect = canvas.getBoundingClientRect();
+      var mx = e.clientX - bRect.left;
+      var hoverInfo = document.getElementById('timelineHover');
+      // Find nearest snapshot by x
+      var best = null; var bestDist = Infinity;
+      for (var i = 0; i < snapshots.length; i++) {
+        var d = Math.abs(mx - toX(i));
+        if (d < bestDist) { bestDist = d; best = snapshots[i]; }
+      }
+      if (best && bestDist < 20) {
+        var html = '<strong>' + escHtml(best._label) + '</strong><br>Total: ' + fmt(best._total) + ' tokens<br>';
+        layers.forEach(function(l) {
+          if (best[l.key] > 0) {
+            html += '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + l.color + ';margin-right:4px"></span>' +
+              escHtml(l.label) + ': ' + fmt(best[l.key]) + '<br>';
+          }
+        });
+        html += '<span style="color:var(--text-tertiary)">' + new Date(best.time).toLocaleTimeString() + '</span>';
+        hoverInfo.innerHTML = html;
+        hoverInfo.classList.add('visible');
+      } else {
+        hoverInfo.classList.remove('visible');
+      }
+    };
+    canvas.onmouseleave = function() {
+      document.getElementById('timelineHover').classList.remove('visible');
+    };
+
+    // ── Legend ──
+    var tl = document.getElementById('timelineLegend');
+    tl.innerHTML = '';
+    var legendItems = layers.filter(function(l) {
+      return snapshots[snapshots.length - 1][l.key] > 0;
+    });
+    legendItems.forEach(function(it) {
+      var item = document.createElement('div');
+      item.className = 'legend-item';
+      item.innerHTML = '<span class="legend-dot" style="background:' + it.color + '"></span>' + escHtml(it.label);
+      tl.appendChild(item);
+    });
+  }
+
+  // ── Tool calls ──
+  function extractToolTarget(c) {
+    var name = (c.tool || c.name || '').toLowerCase();
+    var input = c.input || {};
+
+    // Read / Edit / Write: file_path
+    if (name === 'read' || name === 'edit' || name === 'write') {
+      var fp = input.file_path || c.filePath || '';
+      if (fp) return shortenPath(fp);
+      return '';
+    }
+
+    // Bash: command
+    if (name === 'bash') {
+      var cmd = input.command || '';
+      return cmd.length > 60 ? cmd.slice(0, 60) + '\u2026' : cmd;
+    }
+
+    // Grep
+    if (name === 'grep') {
+      var parts = [];
+      if (input.pattern) parts.push('/' + input.pattern + '/');
+      if (input.path) parts.push(shortenPath(input.path));
+      return parts.join(' in ');
+    }
+
+    // Glob
+    if (name === 'glob') {
+      return input.pattern || '';
+    }
+
+    // Agent / Task
+    if (name === 'agent' || name === 'task' || name === 'taskcreate' || name === 'sendmessage') {
+      var parts2 = [];
+      if (input.subagent_type) parts2.push(input.subagent_type);
+      if (input.description) parts2.push(input.description.length > 60 ? input.description.slice(0, 60) + '\u2026' : input.description);
+      return parts2.join(': ');
+    }
+
+    // Skill
+    if (name === 'skill') {
+      return input.skill || input.skill_name || '';
+    }
+
+    // MCP tools (starts with mcp__)
+    if (name.startsWith('mcp__')) {
+      var segments = name.split('__');
+      if (segments.length >= 3) return segments[1] + '/' + segments.slice(2).join('__');
+      if (segments.length === 2) return segments[1];
+      return name;
+    }
+
+    // Fallback
+    return c.filePath || input.file_path || '';
+  }
+
+  function shortenPath(fp) {
+    if (!fp) return '';
+    // Remove common home directory prefixes
+    fp = fp.replace(/^\/Users\/[^\/]+\//, '~/').replace(/^\/home\/[^\/]+\//, '~/');
+    // If still long, show last 3 segments
+    var parts = fp.split('/');
+    if (parts.length > 4) {
+      return '\u2026/' + parts.slice(-3).join('/');
+    }
+    return fp;
+  }
+
+  function getSortedTurns(d) {
+    return (d.turns || []).slice().sort(function(a, b) {
+      return new Date(a.timestamp || 0) - new Date(b.timestamp || 0);
+    });
+  }
+
+  function findTurnForTimestamp(ts, turns) {
+    if (!ts || !turns || turns.length === 0) return -1;
+    var targetTime = new Date(ts).getTime();
+    var turnIdx = -1;
+    for (var i = 0; i < turns.length; i++) {
+      if (new Date(turns[i].timestamp).getTime() <= targetTime) turnIdx = i;
+      else break;
+    }
+    return turnIdx;
+  }
+
+  function renderToolCalls(d) {
+    var agg = document.getElementById('toolAgg');
+    var list = document.getElementById('toolList');
+    var empty = document.getElementById('toolEmpty');
+    var calls = d.toolCalls || [];
+    var emptyText = empty.querySelector('.empty-state-text');
+    var sortedTurns = getSortedTurns(d);
+
+    if (activeTurn !== null) {
+      calls = calls.filter(function(c) {
+        return findTurnForTimestamp(c.timestamp, sortedTurns) === activeTurn;
+      });
+    }
+
+    if (calls.length === 0) {
+      agg.innerHTML = '';
+      list.innerHTML = '';
+      if (emptyText) emptyText.textContent = activeTurn === null ? 'No tool calls recorded yet' : 'No tool calls recorded for this turn';
+      empty.style.display = '';
+      return;
+    }
+    if (emptyText) emptyText.textContent = 'No tool calls recorded yet';
+    empty.style.display = 'none';
+
+    // Aggregation: count + total tokens per tool
+    var counts = {};
+    var tokenTotals = {};
+    calls.forEach(function(c) {
+      var name = c.tool || c.name || 'unknown';
+      counts[name] = (counts[name] || 0) + 1;
+      tokenTotals[name] = (tokenTotals[name] || 0) + (c.tokenEstimate || c.tokens || 0);
+    });
+    var sorted = Object.keys(counts).sort(function(a, b) { return tokenTotals[b] - tokenTotals[a]; });
+
+    agg.innerHTML = '';
+    sorted.forEach(function(name) {
+      var item = document.createElement('div');
+      item.className = 'tool-agg-item';
+      item.innerHTML = '<span class="tool-agg-count">' + counts[name] + '</span>' +
+        escHtml(name) +
+        '<span class="tool-agg-tokens">' + fmt(tokenTotals[name]) + '</span>';
+      agg.appendChild(item);
+    });
+
+    // Build turn boundary map: timestamp → turn info
+    // List with turn dividers
+    list.innerHTML = '';
+    var lastTurnIdx = -1;
+    calls.forEach(function(c, idx) {
+      // Insert turn divider when turn changes
+      var turnIdx = findTurnForTimestamp(c.timestamp, sortedTurns);
+      if (turnIdx >= 0 && turnIdx !== lastTurnIdx) {
+        lastTurnIdx = turnIdx;
+        var turn = sortedTurns[turnIdx];
+        var div = document.createElement('div');
+        div.className = 'turn-divider';
+        var attachInfo = turn.attachments ? ' <span class="turn-attach">+' + turn.attachments + ' attachment(s)</span>' : '';
+        div.innerHTML = '<span class="turn-label"><span class="turn-num">' + (turnIdx + 1) + '</span>' +
+          escHtml(turn.text || 'User message') + attachInfo + '</span>';
+        list.appendChild(div);
+      }
+
+      var name = c.tool || c.name || 'unknown';
+      var tokens = c.tokenEstimate || c.tokens || 0;
+      var target = extractToolTarget(c);
+      var output = c.output || c.preview || '';
+      var lines = String(output).split('\n').slice(0, 3).join('\n');
+      var color = c.color || colorForTool(name);
+
+      var card = document.createElement('div');
+      card.className = 'tool-card';
+      card.innerHTML =
+        '<div class="tool-icon" style="background:' + color + '">' + escHtml(name.charAt(0).toUpperCase()) + '</div>' +
+        '<div class="tool-info">' +
+          '<div class="tool-name">' + escHtml(name) + '</div>' +
+          (target ? '<div class="tool-target">' + escHtml(target) + '</div>' : '') +
+          '<span class="tool-badge ' + tokenBadgeClass(tokens) + '">' + fmt(tokens) + ' tokens</span>' +
+          (output ? '<button class="tool-toggle" data-idx="' + idx + '">Show output</button><div class="tool-preview" id="tp-' + idx + '">' + escHtml(lines) + '</div>' : '') +
+        '</div>';
+      list.appendChild(card);
+    });
+
+    list.querySelectorAll('.tool-toggle').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var prev = document.getElementById('tp-' + this.getAttribute('data-idx'));
+        if (prev) {
+          var open = prev.classList.toggle('open');
+          this.textContent = open ? 'Hide output' : 'Show output';
+        }
+      });
+    });
+  }
+
+  // Component color palette from spec Section 9
+  var SPEC_COLORS = {
+    system:       '#534AB7', // System prompt
+    tools:        '#0F6E56', // Built-in tools
+    mcp:          '#D85A30', // MCP tools
+    agents:       '#378ADD', // Agents
+    memory:       '#D4537E', // Memory
+    skill_meta:   '#3B6D11', // Skill frontmatter
+    skill_body:   '#97C459', // Skill body
+    plan:         '#1D9E75', // Plan/todo
+    user_msg:     '#BA7517', // User messages
+    tool_results: '#EF9F27', // Tool results
+    responses:    '#854F0B', // AI responses
+    subagent:     '#85B7EB', // Subagent
+    buffer:       '#B4B2A9', // Compact buffer
+    reasoning:    '#888780', // Reasoning
+    free:         '#E8E6DF'  // Free space
+  };
+
+  function colorForTool(name) {
+    var n = name.toLowerCase();
+    if (n.includes('read') || n.includes('file') || n.includes('glob')) return SPEC_COLORS.tools;
+    if (n.includes('write') || n.includes('edit')) return SPEC_COLORS.mcp;
+    if (n.includes('bash') || n.includes('exec') || n.includes('command')) return SPEC_COLORS.system;
+    if (n.includes('search') || n.includes('grep') || n.includes('find')) return SPEC_COLORS.agents;
+    if (n.includes('mcp')) return SPEC_COLORS.mcp;
+    if (n.includes('agent') || n.includes('subagent')) return SPEC_COLORS.subagent;
+    if (n.includes('memory') || n.includes('claude.md')) return SPEC_COLORS.memory;
+    if (n.includes('plan') || n.includes('todo')) return SPEC_COLORS.plan;
+    if (n.includes('skill')) return SPEC_COLORS.skill_meta;
+    // Hash into the spec palette for unknown tools
+    var palette = Object.values(SPEC_COLORS);
+    var h = 0;
+    for (var i = 0; i < name.length; i++) h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+    return palette[Math.abs(h) % (palette.length - 1)]; // exclude 'free' color
+  }
+
+  // ── Agents (git graph style) ──
+  function formatRelativeTime(ts) {
+    if (!ts) return '';
+    var now = Date.now();
+    var then = new Date(ts).getTime();
+    var diff = Math.floor((now - then) / 1000);
+    if (diff < 60) return diff + 's ago';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function renderAgents(d) {
+    var graph = document.getElementById('agentsGraph');
+    var empty = document.getElementById('agentsEmpty');
+    var subs = d.subagents || [];
+
+    // Also look through toolCalls for Agent tool calls
+    var agentCalls = (d.toolCalls || []).filter(function(c) {
+      var n = (c.tool || c.name || '').toLowerCase();
+      return n === 'agent' || n === 'sendmessage' || n === 'taskcreate';
+    });
+
+    // Merge subagents and agent tool calls (dedupe by id)
+    var seenIds = {};
+    var allAgents = [];
+    subs.forEach(function(s) {
+      var id = s.id || s.tool_use_id || ('sub-' + allAgents.length);
+      if (!seenIds[id]) {
+        seenIds[id] = true;
+        allAgents.push({
+          type: s.subagentType || s.type || 'general-purpose',
+          description: s.description || s.name || '',
+          timestamp: s.timestamp || '',
+          id: id,
+          tokens: s.tokens || s.tokenCost || s.tokenEstimate || 0
+        });
+      }
+    });
+    agentCalls.forEach(function(c) {
+      var id = c.id || c.tool_use_id || ('tc-' + allAgents.length);
+      if (!seenIds[id]) {
+        seenIds[id] = true;
+        allAgents.push({
+          type: (c.input && c.input.subagent_type) || c.subagentType || 'general-purpose',
+          description: (c.input && c.input.description) || c.description || '',
+          timestamp: c.timestamp || '',
+          id: id,
+          tokens: c.tokenEstimate || c.tokens || 0
+        });
+      }
+    });
+
+    var turns = getSortedTurns(d);
+
+    // Sort by timestamp
+    allAgents.sort(function(a, b) {
+      if (!a.timestamp) return -1;
+      if (!b.timestamp) return 1;
+      return new Date(a.timestamp) - new Date(b.timestamp);
+    });
+
+    if (activeTurn !== null) {
+      allAgents = allAgents.filter(function(agent) {
+        return findTurnForTimestamp(agent.timestamp, turns) === activeTurn;
+      });
+    }
+
+    var html = '<div class="git-graph">';
+
+    // Main session start node
+    html +=
+      '<div class="git-node main-node">' +
+        '<div class="git-node-dot"></div>' +
+        '<div class="git-node-content">' +
+          '<div class="git-node-title">Session Start</div>' +
+          '<div class="git-node-desc">' + escHtml(d.model || 'Main session') + ' &mdash; ' + escHtml(d.sessionId ? d.sessionId.slice(0, 12) : '') + '</div>' +
+          '<div class="git-node-badge">' + fmt(d.totalUsedTokens || 0) + ' total tokens</div>' +
+        '</div>' +
+      '</div>';
+
+    if (allAgents.length === 0) {
+      // Show turn markers even without agents
+      if (activeTurn !== null && turns[activeTurn]) {
+        html +=
+          '<div class="git-node main-node">' +
+            '<div class="git-node-dot" style="background:' + SPEC_COLORS.user_msg + '"></div>' +
+            '<div class="git-node-content">' +
+              '<div class="git-node-title" style="color:' + SPEC_COLORS.user_msg + '">Turn ' + (activeTurn + 1) + '</div>' +
+              '<div class="git-node-desc">' + escHtml(turns[activeTurn].text || 'User message') + '</div>' +
+            '</div>' +
+          '</div>';
+      } else {
+        turns.forEach(function(turn, ti) {
+          html +=
+            '<div class="git-node main-node">' +
+              '<div class="git-node-dot" style="background:' + SPEC_COLORS.user_msg + '"></div>' +
+              '<div class="git-node-content">' +
+                '<div class="git-node-title" style="color:' + SPEC_COLORS.user_msg + '">Turn ' + (ti + 1) + '</div>' +
+                '<div class="git-node-desc">' + escHtml(turn.text || 'User message') + '</div>' +
+              '</div>' +
+            '</div>';
+        });
+      }
+      html +=
+        '<div class="git-node main-node">' +
+          '<div class="git-node-dot"></div>' +
+          '<div class="git-node-content">' +
+            '<div class="git-node-title">Current</div>' +
+            '<div class="git-node-desc" style="color:var(--text-tertiary)">' + (activeTurn === null ? 'No subagents spawned in this session' : 'No subagents spawned in this turn') + '</div>' +
+          '</div>' +
+        '</div>';
+      empty.style.display = '';
+    } else {
+      empty.style.display = 'none';
+      var lastAgentTurn = -1;
+
+      allAgents.forEach(function(agent) {
+        // Insert turn divider if turn changed
+        var agentTurn = findTurnForTimestamp(agent.timestamp, turns);
+        if (agentTurn >= 0 && agentTurn !== lastAgentTurn) {
+          lastAgentTurn = agentTurn;
+          var turn = turns[agentTurn];
+          html +=
+            '<div class="git-node main-node">' +
+              '<div class="git-node-dot" style="background:' + SPEC_COLORS.user_msg + '"></div>' +
+              '<div class="git-node-content">' +
+                '<div class="git-node-title" style="color:' + SPEC_COLORS.user_msg + '">Turn ' + (agentTurn + 1) + '</div>' +
+                '<div class="git-node-desc">' + escHtml(turn.text || 'User message') +
+                (turn.attachments ? ' <span class="turn-attach">+' + turn.attachments + ' file(s)</span>' : '') +
+                '</div>' +
+              '</div>' +
+            '</div>';
+        }
+        // Agent spawn node (branching off)
+        var agentLabel = agent.type || 'Agent';
+        // Capitalize first letter
+        agentLabel = agentLabel.charAt(0).toUpperCase() + agentLabel.slice(1);
+
+        html +=
+          '<div class="git-node agent-node">' +
+            '<div class="git-node-dot"></div>' +
+            '<div class="git-node-branch"></div>' +
+            '<div class="git-node-content">' +
+              '<div class="git-node-title">' + escHtml(agentLabel) + '</div>' +
+              (agent.description ? '<div class="git-node-desc">' + escHtml(agent.description.length > 100 ? agent.description.slice(0, 100) + '\u2026' : agent.description) + '</div>' : '') +
+              '<div class="git-node-time">' + (agent.timestamp ? formatRelativeTime(agent.timestamp) : '') + '</div>' +
+              (agent.tokens ? '<div class="git-node-badge">' + fmt(agent.tokens) + ' tokens</div>' : '') +
+            '</div>' +
+          '</div>';
+
+        // Return/merge node
+        html +=
+          '<div class="git-node return-node">' +
+            '<div class="git-node-dot"></div>' +
+            '<div class="git-node-branch"></div>' +
+            '<div class="git-node-content">' +
+              '<div class="git-node-desc" style="font-style:italic;color:var(--text-tertiary)">returned to main</div>' +
+            '</div>' +
+          '</div>';
+      });
+
+      // Current state node
+      html +=
+        '<div class="git-node main-node">' +
+          '<div class="git-node-dot"></div>' +
+          '<div class="git-node-content">' +
+            '<div class="git-node-title">Current</div>' +
+            '<div class="git-node-desc">' + allAgents.length + ' subagent' + (allAgents.length !== 1 ? 's' : '') + ' spawned</div>' +
+          '</div>' +
+        '</div>';
+    }
+
+    html += '</div>';
+    graph.innerHTML = html;
+  }
+
+  // ── Master update ──
+  function update(d) {
+    DATA = d;
+    applyTheme(d.tool);
+    renderHeader(d);
+    renderBar(d);
+    renderComponents(d);
+    renderToolCalls(d);
+    renderAgents(d);
+    renderTurnFilter(d);
+
+    // Re-render timeline if visible
+    if (document.getElementById('panel-timeline').classList.contains('active')) {
+      renderTimeline();
+    }
+
+    document.getElementById('lastUpdate').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+  }
+
+  // ── Session selector ──
+  var currentSessionOverride = null;
+
+  function loadSessions() {
+    fetch('/api/sessions').then(function(r) { return r.json(); }).then(function(sessions) {
+      var sel = document.getElementById('hSessionSelect');
+      sel.innerHTML = '<option value="">Current session</option>';
+      (sessions || []).forEach(function(s) {
+        var opt = document.createElement('option');
+        opt.value = s.id;
+        var date = s.mtime ? new Date(s.mtime).toLocaleDateString() : '';
+        var size = s.size ? Math.round(s.size / 1024) + 'KB' : '';
+        var shortId = s.id.length > 12 ? s.id.slice(0, 8) : s.id;
+        opt.textContent = shortId + ' (' + date + ', ' + size + ')';
+        sel.appendChild(opt);
+      });
+    }).catch(function() {});
+  }
+
+  document.getElementById('hSessionSelect').addEventListener('change', function() {
+    currentSessionOverride = this.value || null;
+    fetchData();
+  });
+
+  // ── Turn filter ──
+  var activeTurn = null; // null = show all
+
+  function renderTurnFilter(d) {
+    var bar = document.getElementById('turnFilterBar');
+    var scroll = document.getElementById('turnFilterScroll');
+    var turns = d.turns || [];
+
+    if (turns.length === 0) { bar.style.display = 'none'; return; }
+    bar.style.display = '';
+
+    scroll.innerHTML = '';
+
+    // "All turns" chip
+    var allChip = document.createElement('div');
+    allChip.className = 'turn-chip turn-chip-all' + (activeTurn === null ? ' active' : '');
+    allChip.textContent = 'All turns';
+    allChip.addEventListener('click', function() {
+      activeTurn = null;
+      renderTurnFilter(DATA);
+      renderToolCalls(DATA);
+      renderAgents(DATA);
+    });
+    scroll.appendChild(allChip);
+
+    turns.forEach(function(turn, i) {
+      var chip = document.createElement('div');
+      chip.className = 'turn-chip' + (activeTurn === i ? ' active' : '');
+      var text = turn.text || 'Turn ' + (i+1);
+      if (text.length > 30) text = text.slice(0, 29) + '\u2026';
+      chip.innerHTML = '<span class="chip-num">' + (i+1) + '</span>' + escHtml(text);
+      chip.addEventListener('click', function() {
+        activeTurn = (activeTurn === i) ? null : i; // toggle
+        renderTurnFilter(DATA);
+        renderToolCalls(DATA);
+        renderAgents(DATA);
+      });
+      scroll.appendChild(chip);
+    });
+  }
+
+  // ── Auto refresh ──
+  function fetchData() {
+    var url = currentSessionOverride ? '/api/session/' + currentSessionOverride : '/api/data';
+    fetch(url)
+      .then(function(r) { return r.json(); })
+      .then(function(d) { update(d); })
+      .catch(function() {});
+  }
+
+  // ── Resize handling ──
+  var resizeTimer;
+  window.addEventListener('resize', function() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(function() {
+      if (document.getElementById('panel-timeline').classList.contains('active')) {
+        renderTimeline();
+      }
+    }, 200);
+  });
+
+  // ── Boot ──
+  fetchData();
+  setInterval(fetchData, 3000);
+  loadSessions();
+
+  // Expose for external use
+  window.__ctxMonitorUpdate = update;
+})();
+</script>
+</body>
+</html>

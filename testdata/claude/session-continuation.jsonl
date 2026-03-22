@@ -1,0 +1,2 @@
+{"type":"user","sessionId":"different-session-id","timestamp":"2025-03-19T11:00:00Z","message":{"content":"Continue from where we left off"},"userType":"external","uuid":"cu1"}
+{"type":"assistant","timestamp":"2025-03-19T11:00:05Z","message":{"model":"claude-opus-4-6[1m]","content":[{"type":"text","text":"Continuing the previous work."}],"usage":{"input_tokens":50000,"output_tokens":500}},"uuid":"ca1","parentUuid":"cu1"}

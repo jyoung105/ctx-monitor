@@ -1,0 +1,11 @@
+# Codex CLI configuration
+model = "gpt-5.4"
+reasoning_effort = "high"
+
+[mcp_servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem"]
+
+[agents.code_reviewer]
+description = "Reviews code changes"
+model = "gpt-5.4-mini"

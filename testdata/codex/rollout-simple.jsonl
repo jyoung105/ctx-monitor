@@ -1,0 +1,8 @@
+{"type": "session_meta", "session_id": "codex-sess-1", "model": "gpt-5.4", "model_context_window": 256000}
+{"type": "event_msg", "payload": {"type": "turn_started", "turn_id": "t1", "model": "gpt-5.4", "timestamp": "2025-03-19T10:00:01Z"}}
+{"type": "event_msg", "payload": {"type": "user_message", "text": "Fix the bug in main.py", "timestamp": "2025-03-19T10:00:02Z"}}
+{"type": "response_item", "role": "assistant", "content": [{"type": "text", "text": "I'll fix the bug."}]}
+{"type": "response_item", "role": "assistant", "content": [{"type": "function_call", "name": "apply_patch", "call_id": "fc1", "arguments": "*** main.py\n@@@ -10,3 +10,3 @@@\n- print('bug')\n+ print('fixed')"}]}
+{"type": "response_item", "role": "user", "content": [{"type": "function_call_output", "call_id": "fc1", "output": "Patch applied successfully"}]}
+{"type": "event_msg", "payload": {"type": "token_count", "input_tokens": 4000, "output_tokens": 500, "total_tokens": 4500, "cached_tokens": 1000, "reasoning_tokens": 200, "timestamp": "2025-03-19T10:00:08Z"}}
+{"type": "event_msg", "payload": {"type": "turn_completed", "turn_id": "t1", "status": "completed", "timestamp": "2025-03-19T10:00:09Z"}}
