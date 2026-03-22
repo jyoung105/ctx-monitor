@@ -268,6 +268,51 @@ func TestFindAllSessions_UsesTTLCache(t *testing.T) {
 	}
 }
 
+func TestParseSessionSummaryFromOffset_AppendsDelta(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	data, err := os.ReadFile(testdataPath("session-simple.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write temp session: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat session: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	appendLines := "\n" +
+		`{"type":"user","timestamp":"2025-03-19T10:00:30Z","message":{"content":"One more thing"},"uuid":"u4"}` + "\n" +
+		`{"type":"assistant","timestamp":"2025-03-19T10:00:35Z","message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":7100,"output_tokens":120}},"uuid":"a4","parentUuid":"u4"}`
+	if _, err := f.WriteString(appendLines); err != nil {
+		_ = f.Close()
+		t.Fatalf("append lines: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	delta, err := ParseSessionSummaryFromOffset(path, info.Size())
+	if err != nil {
+		t.Fatalf("ParseSessionSummaryFromOffset returned error: %v", err)
+	}
+	if len(delta.Turns) != 1 {
+		t.Fatalf("delta turn count = %d, want 1", len(delta.Turns))
+	}
+	if delta.TokenBuckets.UserMsg == 0 {
+		t.Fatal("expected appended user message tokens in delta")
+	}
+	if delta.TokenBuckets.Responses == 0 {
+		t.Fatal("expected appended response tokens in delta")
+	}
+}
+
 func toolCallNameSet(tcs []model.ToolCall) map[string]bool {
 	set := make(map[string]bool, len(tcs))
 	for _, tc := range tcs {

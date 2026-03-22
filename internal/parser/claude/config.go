@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/tonylee/ctx-monitor/internal/model"
 )
@@ -19,6 +21,26 @@ var knownMCPSizes = map[string]int{
 	"playwright": 14300,
 	"sentry":     10000,
 }
+
+type memoryConfigCacheEntry struct {
+	config     model.MemoryConfig
+	expiresAt  time.Time
+}
+
+type skillFileCacheEntry struct {
+	files      []model.SkillFile
+	expiresAt  time.Time
+}
+
+var (
+	claudeConfigParseNow = time.Now
+	memoryConfigCacheMu  sync.Mutex
+	memoryConfigCache    = map[string]memoryConfigCacheEntry{}
+	memoryConfigCacheTTL = time.Second
+	skillFileCacheMu     sync.Mutex
+	skillFileCache       = map[string]skillFileCacheEntry{}
+	skillFileCacheTTL    = time.Second
+)
 
 // ParseConfig reads Claude Code configuration from multiple sources and returns
 // a unified ClaudeConfig. Returns nil on catastrophic failure, but tolerates
@@ -143,6 +165,19 @@ func readMCPSettingsFile(path string) *mcpSettingsFile {
 // ---------------------------------------------------------------------------
 
 func parseMemoryConfig(projectPath, home string) model.MemoryConfig {
+	cacheKey := home + "::" + projectPath
+	now := claudeConfigParseNow()
+	memoryConfigCacheMu.Lock()
+	cached, ok := memoryConfigCache[cacheKey]
+	memoryConfigCacheMu.Unlock()
+	if ok && now.Before(cached.expiresAt) {
+		files := append([]model.MemoryFile(nil), cached.config.Files...)
+		return model.MemoryConfig{
+			Files:       files,
+			TotalTokens: cached.config.TotalTokens,
+		}
+	}
+
 	var files []model.MemoryFile
 
 	// Global CLAUDE.md
@@ -186,10 +221,17 @@ func parseMemoryConfig(projectPath, home string) model.MemoryConfig {
 		total += f.Tokens
 	}
 
-	return model.MemoryConfig{
+	cfg := model.MemoryConfig{
 		Files:       files,
 		TotalTokens: total,
 	}
+	memoryConfigCacheMu.Lock()
+	memoryConfigCache[cacheKey] = memoryConfigCacheEntry{
+		config:    cfg,
+		expiresAt: now.Add(memoryConfigCacheTTL),
+	}
+	memoryConfigCacheMu.Unlock()
+	return cfg
 }
 
 func readMemoryFile(path string) *model.MemoryFile {
@@ -278,6 +320,14 @@ func parseSkillsConfig(projectPath, home string) model.SkillsConfig {
 }
 
 func findSkillFiles(skillsDir string) []model.SkillFile {
+	now := claudeConfigParseNow()
+	skillFileCacheMu.Lock()
+	cached, ok := skillFileCache[skillsDir]
+	skillFileCacheMu.Unlock()
+	if ok && now.Before(cached.expiresAt) {
+		return append([]model.SkillFile(nil), cached.files...)
+	}
+
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
 		return nil
@@ -302,6 +352,12 @@ func findSkillFiles(skillsDir string) []model.SkillFile {
 		})
 	}
 
+	skillFileCacheMu.Lock()
+	skillFileCache[skillsDir] = skillFileCacheEntry{
+		files:     append([]model.SkillFile(nil), skills...),
+		expiresAt: now.Add(skillFileCacheTTL),
+	}
+	skillFileCacheMu.Unlock()
 	return skills
 }
 

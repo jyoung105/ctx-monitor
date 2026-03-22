@@ -3,6 +3,7 @@ package claude
 import (
 	"bufio"
 	"encoding/json"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -408,6 +409,12 @@ func ParseSessionSummary(filePath string) (*model.ClaudeSession, error) {
 	return parseSessionWithOptions(filePath, summaryParseOptions())
 }
 
+// ParseSessionSummaryFromOffset parses only the appended portion of a Claude
+// session file using summary retention settings.
+func ParseSessionSummaryFromOffset(filePath string, offset int64) (*model.ClaudeSession, error) {
+	return parseSessionWithOptionsFromOffset(filePath, summaryParseOptions(), offset)
+}
+
 // ParseSessionTimeline parses a Claude session while retaining only the fields
 // needed to build timeline payloads.
 func ParseSessionTimeline(filePath string) (*model.ClaudeSession, error) {
@@ -415,11 +422,21 @@ func ParseSessionTimeline(filePath string) (*model.ClaudeSession, error) {
 }
 
 func parseSessionWithOptions(filePath string, opts parseOptions) (*model.ClaudeSession, error) {
+	return parseSessionWithOptionsFromOffset(filePath, opts, 0)
+}
+
+func parseSessionWithOptionsFromOffset(filePath string, opts parseOptions, offset int64) (*model.ClaudeSession, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
+
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return nil, err
+		}
+	}
 
 	// Derive UUID from filename (without extension).
 	fileUUID := strings.TrimSuffix(filepath.Base(filePath), ".jsonl")

@@ -316,3 +316,54 @@ func TestBuildClaudeTimelineCached_InvalidatesOnFileChange(t *testing.T) {
 		t.Fatalf("timeline cache size = %d, want 2 after invalidation", len(timelineCache))
 	}
 }
+
+func TestParseClaudeSessionForArgs_AppendsIncrementally(t *testing.T) {
+	claudeSessionCacheMu.Lock()
+	claudeSessionCache = map[sessionCacheKey]*model.ClaudeSession{}
+	claudeSessionCacheMu.Unlock()
+
+	path := copyFixtureToTemp(t, benchmarkRepoPath("testdata", "claude", "session-simple.jsonl"))
+
+	first, err := parseClaudeSessionForArgs(path, cliArgs{})
+	if err != nil {
+		t.Fatalf("first parse: %v", err)
+	}
+	firstTurns := len(first.Turns)
+	firstUserMsg := first.TokenBuckets.UserMsg
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	appendLines := "\n" +
+		`{"type":"user","timestamp":"2025-03-19T10:00:30Z","message":{"content":"One more thing"},"uuid":"u4"}` + "\n" +
+		`{"type":"assistant","timestamp":"2025-03-19T10:00:35Z","message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":7100,"output_tokens":120}},"uuid":"a4","parentUuid":"u4"}`
+	if _, err := f.WriteString(appendLines); err != nil {
+		_ = f.Close()
+		t.Fatalf("append lines: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+	now := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	second, err := parseClaudeSessionForArgs(path, cliArgs{})
+	if err != nil {
+		t.Fatalf("second parse: %v", err)
+	}
+	if len(second.Turns) != firstTurns+1 {
+		t.Fatalf("turn count = %d, want %d", len(second.Turns), firstTurns+1)
+	}
+	if second.TokenBuckets.UserMsg <= firstUserMsg {
+		t.Fatalf("user msg tokens = %d, want > %d after append", second.TokenBuckets.UserMsg, firstUserMsg)
+	}
+
+	claudeSessionCacheMu.Lock()
+	defer claudeSessionCacheMu.Unlock()
+	if len(claudeSessionCache) != 1 {
+		t.Fatalf("claude session cache size = %d, want 1 after append merge", len(claudeSessionCache))
+	}
+}

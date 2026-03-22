@@ -69,6 +69,11 @@ type cachedCodexSession struct {
 	session *model.CodexSession
 }
 
+type cachedClaudeSession struct {
+	key     sessionCacheKey
+	session *model.ClaudeSession
+}
+
 // ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
@@ -374,23 +379,30 @@ func parseClaudeSession(filePath string, detailed bool) (*model.ClaudeSession, e
 		return cached, nil
 	}
 
+	if !detailed {
+		if previous := findCachedClaudeSessionForAppend(filePath, detailed, key.size); previous != nil && previous.key.mtimeNS <= key.mtimeNS {
+			delta, err := claudeparser.ParseSessionSummaryFromOffset(filePath, previous.key.size)
+			if err == nil {
+				session := mergeClaudeSessionDelta(previous.session, delta)
+				storeClaudeSessionCache(key, session)
+				return session, nil
+			}
+		}
+	}
+
 	if detailed {
 		session, err := claudeparser.ParseSession(filePath)
 		if err != nil {
 			return nil, err
 		}
-		claudeSessionCacheMu.Lock()
-		claudeSessionCache[key] = session
-		claudeSessionCacheMu.Unlock()
+		storeClaudeSessionCache(key, session)
 		return session, nil
 	}
 	session, err := claudeparser.ParseSessionSummary(filePath)
 	if err != nil {
 		return nil, err
 	}
-	claudeSessionCacheMu.Lock()
-	claudeSessionCache[key] = session
-	claudeSessionCacheMu.Unlock()
+	storeClaudeSessionCache(key, session)
 	return session, nil
 }
 
@@ -417,6 +429,25 @@ func findCachedCodexSessionForAppend(path string, detailed bool, newSize int64) 
 	return best
 }
 
+func findCachedClaudeSessionForAppend(path string, detailed bool, newSize int64) *cachedClaudeSession {
+	claudeSessionCacheMu.Lock()
+	defer claudeSessionCacheMu.Unlock()
+
+	var best *cachedClaudeSession
+	for key, session := range claudeSessionCache {
+		if key.path != path || key.detailed != detailed {
+			continue
+		}
+		if key.size >= newSize {
+			continue
+		}
+		if best == nil || key.size > best.key.size {
+			best = &cachedClaudeSession{key: key, session: session}
+		}
+	}
+	return best
+}
+
 func cloneCodexSession(src *model.CodexSession) *model.CodexSession {
 	if src == nil {
 		return nil
@@ -428,6 +459,23 @@ func cloneCodexSession(src *model.CodexSession) *model.CodexSession {
 	cloned.SubagentSpawns = append([]model.CodexToolCall(nil), src.SubagentSpawns...)
 	cloned.PlanUsage = append([]model.CodexToolCall(nil), src.PlanUsage...)
 	cloned.Turns = append([]interface{}(nil), src.Turns...)
+	return &cloned
+}
+
+func cloneClaudeSession(src *model.ClaudeSession) *model.ClaudeSession {
+	if src == nil {
+		return nil
+	}
+	cloned := *src
+	cloned.Messages = append([]model.Message(nil), src.Messages...)
+	cloned.ToolCalls = append([]model.ToolCall(nil), src.ToolCalls...)
+	cloned.ToolResults = append([]model.ToolResult(nil), src.ToolResults...)
+	cloned.Turns = append([]model.Turn(nil), src.Turns...)
+	cloned.Attachments = append([]model.Attachment(nil), src.Attachments...)
+	cloned.SkillActivations = append([]model.SkillActivation(nil), src.SkillActivations...)
+	cloned.SubagentSpawns = append([]model.SubagentSpawn(nil), src.SubagentSpawns...)
+	cloned.PlanUsage = append([]model.PlanEvent(nil), src.PlanUsage...)
+	cloned.CompactionEvents.Timestamps = append([]string(nil), src.CompactionEvents.Timestamps...)
 	return &cloned
 }
 
@@ -484,6 +532,64 @@ func mergeCodexSessionDelta(base, delta *model.CodexSession) *model.CodexSession
 	return merged
 }
 
+func mergeClaudeSessionDelta(base, delta *model.ClaudeSession) *model.ClaudeSession {
+	if base == nil {
+		return delta
+	}
+	if delta == nil {
+		return base
+	}
+
+	merged := cloneClaudeSession(base)
+	if delta.SessionID != "" {
+		merged.SessionID = delta.SessionID
+	}
+	if delta.Model != "" {
+		merged.Model = delta.Model
+	}
+	if delta.Version != "" {
+		merged.Version = delta.Version
+	}
+	if delta.Cwd != "" {
+		merged.Cwd = delta.Cwd
+	}
+	merged.Continuation = merged.Continuation || delta.Continuation
+	if merged.Timestamps.First == "" {
+		merged.Timestamps.First = delta.Timestamps.First
+	}
+	if delta.Timestamps.Last != "" {
+		merged.Timestamps.Last = delta.Timestamps.Last
+	}
+
+	merged.Messages = append(merged.Messages, delta.Messages...)
+	merged.ToolCalls = append(merged.ToolCalls, delta.ToolCalls...)
+	merged.ToolResults = append(merged.ToolResults, delta.ToolResults...)
+	merged.Turns = append(merged.Turns, delta.Turns...)
+	merged.Attachments = append(merged.Attachments, delta.Attachments...)
+	merged.SkillActivations = append(merged.SkillActivations, delta.SkillActivations...)
+	merged.SubagentSpawns = append(merged.SubagentSpawns, delta.SubagentSpawns...)
+	merged.PlanUsage = append(merged.PlanUsage, delta.PlanUsage...)
+
+	merged.ThinkingStats.Count += delta.ThinkingStats.Count
+	merged.ThinkingStats.TotalEstimatedTokens += delta.ThinkingStats.TotalEstimatedTokens
+	merged.CompactionEvents.Count += delta.CompactionEvents.Count
+	merged.CompactionEvents.Timestamps = append(merged.CompactionEvents.Timestamps, delta.CompactionEvents.Timestamps...)
+	if delta.Usage != nil {
+		merged.Usage = delta.Usage
+	}
+
+	merged.TokenBuckets.UserMsg += delta.TokenBuckets.UserMsg
+	merged.TokenBuckets.ToolResults += delta.TokenBuckets.ToolResults
+	merged.TokenBuckets.Responses += delta.TokenBuckets.Responses
+	merged.TokenBuckets.Subagent += delta.TokenBuckets.Subagent
+	merged.TokenBuckets.SkillBody += delta.TokenBuckets.SkillBody
+	merged.TokenBuckets.Plan += delta.TokenBuckets.Plan
+	merged.TokenBuckets.Thinking += delta.TokenBuckets.Thinking
+	merged.TokenBuckets.Reasoning += delta.TokenBuckets.Reasoning
+
+	return merged
+}
+
 func storeCodexSessionCache(key sessionCacheKey, session *model.CodexSession) {
 	codexSessionCacheMu.Lock()
 	defer codexSessionCacheMu.Unlock()
@@ -494,6 +600,18 @@ func storeCodexSessionCache(key sessionCacheKey, session *model.CodexSession) {
 		}
 	}
 	codexSessionCache[key] = session
+}
+
+func storeClaudeSessionCache(key sessionCacheKey, session *model.ClaudeSession) {
+	claudeSessionCacheMu.Lock()
+	defer claudeSessionCacheMu.Unlock()
+
+	for existingKey := range claudeSessionCache {
+		if existingKey.path == key.path && existingKey.detailed == key.detailed && existingKey.size < key.size {
+			delete(claudeSessionCache, existingKey)
+		}
+	}
+	claudeSessionCache[key] = session
 }
 
 func parseCodexSessionForArgs(filePath string, args cliArgs) (*model.CodexSession, error) {
