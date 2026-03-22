@@ -88,42 +88,42 @@ type rawLine struct {
 	Type    string          `json:"type"`
 	Payload json.RawMessage `json:"payload"`
 	// top-level fields that appear on various event types
-	Role             string          `json:"role"`
-	Content          json.RawMessage `json:"content"`
-	Model            string          `json:"model"`
-	ReasoningEffort  string          `json:"reasoning_effort"`
-	ModelContextWindow int           `json:"model_context_window"`
-	ID               string          `json:"id"`
-}
-
-type rawPayload struct {
-	Type               string          `json:"type"`
+	Role               string          `json:"role"`
+	Content            json.RawMessage `json:"content"`
 	Model              string          `json:"model"`
 	ReasoningEffort    string          `json:"reasoning_effort"`
 	ModelContextWindow int             `json:"model_context_window"`
-	SessionID          string          `json:"session_id"`
+	ID                 string          `json:"id"`
+}
+
+type rawPayload struct {
+	Type               string `json:"type"`
+	Model              string `json:"model"`
+	ReasoningEffort    string `json:"reasoning_effort"`
+	ModelContextWindow int    `json:"model_context_window"`
+	SessionID          string `json:"session_id"`
 	// token_count fields
-	Usage              json.RawMessage `json:"usage"`
-	TokenCount         json.RawMessage `json:"token_count"`
-	InputTokens        int             `json:"input_tokens"`
-	OutputTokens       int             `json:"output_tokens"`
-	CachedTokens       int             `json:"cached_tokens"`
-	ReasoningTokens    int             `json:"reasoning_tokens"`
-	TotalTokens        int             `json:"total_tokens"`
+	Usage           json.RawMessage `json:"usage"`
+	TokenCount      json.RawMessage `json:"token_count"`
+	InputTokens     int             `json:"input_tokens"`
+	OutputTokens    int             `json:"output_tokens"`
+	CachedTokens    int             `json:"cached_tokens"`
+	ReasoningTokens int             `json:"reasoning_tokens"`
+	TotalTokens     int             `json:"total_tokens"`
 	// tool_call fields
-	Name               string          `json:"name"`
-	Arguments          json.RawMessage `json:"arguments"`
-	CallID             string          `json:"call_id"`
+	Name      string          `json:"name"`
+	Arguments json.RawMessage `json:"arguments"`
+	CallID    string          `json:"call_id"`
 	// tool_result fields
-	Content            string          `json:"content_str"`
+	Content string `json:"content_str"`
 	// compaction fields
-	PreContextSize     int             `json:"pre_context_size"`
-	PostContextSize    int             `json:"post_context_size"`
-	Timestamp          string          `json:"timestamp"`
+	PreContextSize  int    `json:"pre_context_size"`
+	PostContextSize int    `json:"post_context_size"`
+	Timestamp       string `json:"timestamp"`
 	// response_item fields
-	Item               json.RawMessage `json:"item"`
+	Item json.RawMessage `json:"item"`
 	// raw content array
-	ContentArr         json.RawMessage `json:"content"`
+	ContentArr json.RawMessage `json:"content"`
 }
 
 type rawTokenUsage struct {
@@ -139,8 +139,8 @@ type rawTokenUsage struct {
 }
 
 type rawContentItem struct {
-	Type  string `json:"type"`
-	Text  string `json:"text"`
+	Type string `json:"type"`
+	Text string `json:"text"`
 	// function call fields
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
@@ -155,8 +155,38 @@ var (
 	patchHunkRe = regexp.MustCompile(`@@@\s+-(\d+),(\d+)\s+\+(\d+),(\d+)\s+@@@`)
 )
 
+type parseOptions struct {
+	retainToolCalls   bool
+	retainToolResults bool
+	retainTurns       bool
+	retainArguments   bool
+}
+
+func fullParseOptions() parseOptions {
+	return parseOptions{
+		retainToolCalls:   true,
+		retainToolResults: true,
+		retainTurns:       true,
+		retainArguments:   true,
+	}
+}
+
+func summaryParseOptions() parseOptions {
+	return parseOptions{}
+}
+
 // ParseSession parses a Codex JSONL session file and returns a CodexSession.
 func ParseSession(filePath string) (*model.CodexSession, error) {
+	return parseSessionWithOptions(filePath, fullParseOptions())
+}
+
+// ParseSessionSummary parses a Codex session while retaining only the fields
+// needed for composition-oriented views.
+func ParseSessionSummary(filePath string) (*model.CodexSession, error) {
+	return parseSessionWithOptions(filePath, summaryParseOptions())
+}
+
+func parseSessionWithOptions(filePath string, opts parseOptions) (*model.CodexSession, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("opening session file: %w", err)
@@ -188,7 +218,7 @@ func ParseSession(filePath string) (*model.CodexSession, error) {
 			continue
 		}
 
-		processLine(session, &raw, line)
+		processLine(session, &raw, line, opts)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -203,7 +233,7 @@ func ParseSession(filePath string) (*model.CodexSession, error) {
 	return session, nil
 }
 
-func processLine(session *model.CodexSession, raw *rawLine, line []byte) {
+func processLine(session *model.CodexSession, raw *rawLine, line []byte, opts parseOptions) {
 	switch raw.Type {
 	case "session_meta":
 		handleSessionMeta(session, line)
@@ -212,10 +242,10 @@ func processLine(session *model.CodexSession, raw *rawLine, line []byte) {
 		handleTurnContext(session, raw, line)
 
 	case "response_item":
-		handleResponseItem(session, line)
+		handleResponseItem(session, line, opts)
 
 	case "event_msg":
-		handleEventMsg(session, raw)
+		handleEventMsg(session, raw, opts)
 
 	default:
 		// Some events may have no type or unknown types — ignore
@@ -265,16 +295,16 @@ func handleTurnContext(session *model.CodexSession, raw *rawLine, line []byte) {
 	}
 }
 
-func handleResponseItem(session *model.CodexSession, line []byte) {
+func handleResponseItem(session *model.CodexSession, line []byte, opts parseOptions) {
 	var v struct {
-		Role    string            `json:"role"`
-		Content []rawContentItem  `json:"content"`
+		Role    string           `json:"role"`
+		Content []rawContentItem `json:"content"`
 		// alternate: single content item
-		Type      string `json:"item_type"`
-		Text      string `json:"text"`
-		Name      string `json:"name"`
+		Type      string          `json:"item_type"`
+		Text      string          `json:"text"`
+		Name      string          `json:"name"`
 		Arguments json.RawMessage `json:"arguments"`
-		ID        string `json:"id"`
+		ID        string          `json:"id"`
 	}
 	if err := json.Unmarshal(line, &v); err != nil {
 		return
@@ -298,11 +328,13 @@ func handleResponseItem(session *model.CodexSession, line []byte) {
 			argStr := argString(item.Arguments)
 			tc := model.CodexToolCall{
 				Name:          name,
-				Arguments:     argStr,
 				ID:            firstNonEmpty(item.ID, item.CallID),
 				TokenEstimate: model.EstimateTokens(argStr),
 			}
-			if name == "apply_patch" {
+			if opts.retainArguments {
+				tc.Arguments = argStr
+			}
+			if opts.retainArguments && name == "apply_patch" {
 				tc.PatchInfo = parseApplyPatch(argStr)
 			}
 			switch {
@@ -313,7 +345,9 @@ func handleResponseItem(session *model.CodexSession, line []byte) {
 				session.PlanUsage = append(session.PlanUsage, tc)
 				session.TokenBuckets.Plan += tc.TokenEstimate
 			default:
-				session.ToolCalls = append(session.ToolCalls, tc)
+				if opts.retainToolCalls {
+					session.ToolCalls = append(session.ToolCalls, tc)
+				}
 			}
 
 		case "function_call_output":
@@ -321,12 +355,15 @@ func handleResponseItem(session *model.CodexSession, line []byte) {
 			if len(content) > 500 {
 				content = content[:500]
 			}
-			tr := model.ToolResult{
-				Content:       content,
-				TokenEstimate: model.EstimateTokens(content),
+			tok := model.EstimateTokens(content)
+			if opts.retainToolResults {
+				tr := model.ToolResult{
+					Content:       content,
+					TokenEstimate: tok,
+				}
+				session.ToolResults = append(session.ToolResults, tr)
 			}
-			session.ToolResults = append(session.ToolResults, tr)
-			session.TokenBuckets.ToolResults += tr.TokenEstimate
+			session.TokenBuckets.ToolResults += tok
 
 		case "reasoning":
 			session.TokenBuckets.Reasoning += model.EstimateTokens(item.Text)
@@ -334,7 +371,7 @@ func handleResponseItem(session *model.CodexSession, line []byte) {
 	}
 }
 
-func handleEventMsg(session *model.CodexSession, raw *rawLine) {
+func handleEventMsg(session *model.CodexSession, raw *rawLine, opts parseOptions) {
 	if raw.Payload == nil {
 		return
 	}
@@ -357,16 +394,20 @@ func handleEventMsg(session *model.CodexSession, raw *rawLine) {
 		}
 
 	case "turn_started":
-		session.Turns = append(session.Turns, map[string]interface{}{
-			"type":      "turn_started",
-			"timestamp": p.Timestamp,
-		})
+		if opts.retainTurns {
+			session.Turns = append(session.Turns, map[string]interface{}{
+				"type":      "turn_started",
+				"timestamp": p.Timestamp,
+			})
+		}
 
 	case "turn_completed":
-		session.Turns = append(session.Turns, map[string]interface{}{
-			"type":      "turn_completed",
-			"timestamp": p.Timestamp,
-		})
+		if opts.retainTurns {
+			session.Turns = append(session.Turns, map[string]interface{}{
+				"type":      "turn_completed",
+				"timestamp": p.Timestamp,
+			})
+		}
 
 	case "context_compacted":
 		ce := model.CompactionEvent{
@@ -377,13 +418,13 @@ func handleEventMsg(session *model.CodexSession, raw *rawLine) {
 		session.CompactionEvents = append(session.CompactionEvents, ce)
 
 	case "tool_call":
-		handlePayloadToolCall(session, &p)
+		handlePayloadToolCall(session, &p, opts)
 
 	case "tool_result":
-		handlePayloadToolResult(session, &p)
+		handlePayloadToolResult(session, &p, opts)
 
 	case "response_item":
-		handlePayloadResponseItem(session, &p)
+		handlePayloadResponseItem(session, &p, opts)
 
 	case "session_meta":
 		if p.SessionID != "" {
@@ -483,16 +524,18 @@ func handleTokenCount(session *model.CodexSession, p *rawPayload) {
 	}
 }
 
-func handlePayloadToolCall(session *model.CodexSession, p *rawPayload) {
+func handlePayloadToolCall(session *model.CodexSession, p *rawPayload, opts parseOptions) {
 	argStr := argString(p.Arguments)
 	tc := model.CodexToolCall{
 		Name:          p.Name,
-		Arguments:     argStr,
 		ID:            firstNonEmpty(p.CallID, p.SessionID),
 		Timestamp:     p.Timestamp,
 		TokenEstimate: model.EstimateTokens(argStr),
 	}
-	if p.Name == "apply_patch" {
+	if opts.retainArguments {
+		tc.Arguments = argStr
+	}
+	if opts.retainArguments && p.Name == "apply_patch" {
 		tc.PatchInfo = parseApplyPatch(argStr)
 	}
 	switch {
@@ -503,11 +546,13 @@ func handlePayloadToolCall(session *model.CodexSession, p *rawPayload) {
 		session.PlanUsage = append(session.PlanUsage, tc)
 		session.TokenBuckets.Plan += tc.TokenEstimate
 	default:
-		session.ToolCalls = append(session.ToolCalls, tc)
+		if opts.retainToolCalls {
+			session.ToolCalls = append(session.ToolCalls, tc)
+		}
 	}
 }
 
-func handlePayloadToolResult(session *model.CodexSession, p *rawPayload) {
+func handlePayloadToolResult(session *model.CodexSession, p *rawPayload, opts parseOptions) {
 	// Content may be in ContentArr or Content field
 	var content string
 	if p.ContentArr != nil {
@@ -532,15 +577,18 @@ func handlePayloadToolResult(session *model.CodexSession, p *rawPayload) {
 	if len(content) > 500 {
 		content = content[:500]
 	}
-	tr := model.ToolResult{
-		Content:       content,
-		TokenEstimate: model.EstimateTokens(content),
+	tok := model.EstimateTokens(content)
+	if opts.retainToolResults {
+		tr := model.ToolResult{
+			Content:       content,
+			TokenEstimate: tok,
+		}
+		session.ToolResults = append(session.ToolResults, tr)
 	}
-	session.ToolResults = append(session.ToolResults, tr)
-	session.TokenBuckets.ToolResults += tr.TokenEstimate
+	session.TokenBuckets.ToolResults += tok
 }
 
-func handlePayloadResponseItem(session *model.CodexSession, p *rawPayload) {
+func handlePayloadResponseItem(session *model.CodexSession, p *rawPayload, opts parseOptions) {
 	if p.Item == nil {
 		return
 	}
@@ -555,14 +603,18 @@ func handlePayloadResponseItem(session *model.CodexSession, p *rawPayload) {
 		argStr := argString(item.Arguments)
 		tc := model.CodexToolCall{
 			Name:          item.Name,
-			Arguments:     argStr,
 			ID:            firstNonEmpty(item.ID, item.CallID),
 			TokenEstimate: model.EstimateTokens(argStr),
 		}
-		if item.Name == "apply_patch" {
+		if opts.retainArguments {
+			tc.Arguments = argStr
+		}
+		if opts.retainArguments && item.Name == "apply_patch" {
 			tc.PatchInfo = parseApplyPatch(argStr)
 		}
-		session.ToolCalls = append(session.ToolCalls, tc)
+		if opts.retainToolCalls {
+			session.ToolCalls = append(session.ToolCalls, tc)
+		}
 	}
 }
 

@@ -138,11 +138,11 @@ var subagentTools = map[string]bool{
 }
 
 var planTools = map[string]bool{
-	"TodoRead":  true,
-	"TodoWrite": true,
-	"todo_read": true,
+	"TodoRead":   true,
+	"TodoWrite":  true,
+	"todo_read":  true,
 	"todo_write": true,
-	"plan":      true,
+	"plan":       true,
 }
 
 func classifyTool(name string) string {
@@ -163,6 +163,33 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+type parseOptions struct {
+	retainMessages    bool
+	retainToolCalls   bool
+	retainToolResults bool
+	retainAttachments bool
+	retainTurns       bool
+	sanitizeInputs    bool
+}
+
+func fullParseOptions() parseOptions {
+	return parseOptions{
+		retainMessages:    true,
+		retainToolCalls:   true,
+		retainToolResults: true,
+		retainAttachments: true,
+		retainTurns:       true,
+	}
+}
+
+func summaryParseOptions() parseOptions {
+	return parseOptions{
+		retainToolCalls: true,
+		retainTurns:     true,
+		sanitizeInputs:  true,
+	}
 }
 
 // isSystemMessage returns true if the text starts with a system/notification prefix.
@@ -232,8 +259,89 @@ func getFloat(m map[string]interface{}, key string) float64 {
 	return v
 }
 
+func extractClaudeToolFilePath(inputRaw interface{}) string {
+	inputMap, ok := inputRaw.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if fp := getStr(inputMap, "file_path"); fp != "" {
+		return fp
+	}
+	if fp := getStr(inputMap, "path"); fp != "" {
+		return fp
+	}
+	return ""
+}
+
+func summarizeClaudeToolInput(toolName string, inputRaw interface{}) interface{} {
+	inputMap, ok := inputRaw.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+
+	keep := map[string]bool{
+		"file_path":     true,
+		"path":          true,
+		"pattern":       true,
+		"command":       true,
+		"description":   true,
+		"prompt":        true,
+		"subagent_type": true,
+		"type":          true,
+		"skill":         true,
+		"skill_name":    true,
+		"args":          true,
+		"title":         true,
+	}
+
+	summary := make(map[string]interface{})
+	for key, value := range inputMap {
+		if !keep[key] {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			limit := 160
+			if key == "command" {
+				limit = 240
+			}
+			summary[key] = truncate(v, limit)
+		case float64, bool, int, int64:
+			summary[key] = v
+		case []interface{}:
+			items := make([]string, 0, len(v))
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					items = append(items, truncate(s, 80))
+				}
+			}
+			if len(items) > 0 {
+				summary[key] = items
+			}
+		}
+	}
+
+	if len(summary) == 0 {
+		return map[string]interface{}{
+			"tool": toolName,
+		}
+	}
+
+	return summary
+}
+
 // ParseSession parses a Claude Code JSONL session file.
 func ParseSession(filePath string) (*model.ClaudeSession, error) {
+	return parseSessionWithOptions(filePath, fullParseOptions())
+}
+
+// ParseSessionSummary parses a Claude session while retaining only the fields
+// needed for composition, agent, tool-call, and timeline-adjacent summary views.
+func ParseSessionSummary(filePath string) (*model.ClaudeSession, error) {
+	return parseSessionWithOptions(filePath, summaryParseOptions())
+}
+
+func parseSessionWithOptions(filePath string, opts parseOptions) (*model.ClaudeSession, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, err
@@ -331,12 +439,14 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 					toolResultCount++
 					resultContent := extractText(block["content"])
 					tok := model.EstimateTokens(resultContent)
-					tr := model.ToolResult{
-						ToolUseID:     getStr(block, "tool_use_id"),
-						Content:       truncate(resultContent, 500),
-						TokenEstimate: tok,
+					if opts.retainToolResults {
+						tr := model.ToolResult{
+							ToolUseID:     getStr(block, "tool_use_id"),
+							Content:       truncate(resultContent, 500),
+							TokenEstimate: tok,
+						}
+						session.ToolResults = append(session.ToolResults, tr)
 					}
-					session.ToolResults = append(session.ToolResults, tr)
 					session.TokenBuckets.ToolResults += tok
 
 				case "image":
@@ -352,13 +462,15 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 					}
 					imgTokens := 1000 // rough estimate for image
 					attachmentTokens += imgTokens
-					session.Attachments = append(session.Attachments, model.Attachment{
-						Type:      "image",
-						MediaType: mediaType,
-						Tokens:    imgTokens,
-						SizeBytes: sizeBytes,
-						Timestamp: timestamp,
-					})
+					if opts.retainAttachments {
+						session.Attachments = append(session.Attachments, model.Attachment{
+							Type:      "image",
+							MediaType: mediaType,
+							Tokens:    imgTokens,
+							SizeBytes: sizeBytes,
+							Timestamp: timestamp,
+						})
+					}
 
 				case "document":
 					attachmentCount++
@@ -377,26 +489,30 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 					}
 					docTokens := model.EstimateTokens(docText)
 					attachmentTokens += docTokens
-					session.Attachments = append(session.Attachments, model.Attachment{
-						Type:      "document",
-						Name:      name,
-						Tokens:    docTokens,
-						SizeBytes: sizeBytes,
-						Timestamp: timestamp,
-					})
+					if opts.retainAttachments {
+						session.Attachments = append(session.Attachments, model.Attachment{
+							Type:      "document",
+							Name:      name,
+							Tokens:    docTokens,
+							SizeBytes: sizeBytes,
+							Timestamp: timestamp,
+						})
+					}
 				}
 			}
 
 			if !isSystem {
 				// Record user turn.
-				turnText := truncate(text, 120)
-				session.Turns = append(session.Turns, model.Turn{
-					Index:        turnIndex,
-					Timestamp:    timestamp,
-					Text:         turnText,
-					Attachments:  attachmentCount,
-					MessageIndex: msgIndex,
-				})
+				if opts.retainTurns {
+					turnText := truncate(text, 120)
+					session.Turns = append(session.Turns, model.Turn{
+						Index:        turnIndex,
+						Timestamp:    timestamp,
+						Text:         turnText,
+						Attachments:  attachmentCount,
+						MessageIndex: msgIndex,
+					})
+				}
 				turnIndex++
 
 				userTokens := model.EstimateTokens(text)
@@ -407,20 +523,22 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 					userType = "system"
 				}
 
-				msg := model.Message{
-					Role:            "user",
-					Type:            recType,
-					UUID:            getStr(rec, "uuid"),
-					ParentUUID:      getStr(rec, "parentUuid"),
-					Timestamp:       timestamp,
-					Text:            truncate(text, 1000),
-					TokenEstimate:   userTokens,
-					ToolResultCount: toolResultCount,
-					AttachmentCount: attachmentCount,
-					AttachmentTokens: attachmentTokens,
-					UserType:        userType,
+				if opts.retainMessages {
+					msg := model.Message{
+						Role:             "user",
+						Type:             recType,
+						UUID:             getStr(rec, "uuid"),
+						ParentUUID:       getStr(rec, "parentUuid"),
+						Timestamp:        timestamp,
+						Text:             truncate(text, 1000),
+						TokenEstimate:    userTokens,
+						ToolResultCount:  toolResultCount,
+						AttachmentCount:  attachmentCount,
+						AttachmentTokens: attachmentTokens,
+						UserType:         userType,
+					}
+					session.Messages = append(session.Messages, msg)
 				}
-				session.Messages = append(session.Messages, msg)
 				msgIndex++
 			}
 
@@ -471,12 +589,16 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 					toolName := getStr(block, "name")
 					toolID := getStr(block, "id")
 					inputRaw := block["input"]
-
 					tc := model.ToolCall{
 						Name:      toolName,
-						Input:     inputRaw,
 						ID:        toolID,
 						Timestamp: timestamp,
+						FilePath:  extractClaudeToolFilePath(inputRaw),
+					}
+					if opts.sanitizeInputs {
+						tc.Input = summarizeClaudeToolInput(toolName, inputRaw)
+					} else {
+						tc.Input = inputRaw
 					}
 
 					// Estimate tokens from input JSON.
@@ -484,7 +606,9 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 					tok := model.EstimateTokens(string(inputJSON))
 					tc.TokenEstimate = tok
 
-					session.ToolCalls = append(session.ToolCalls, tc)
+					if opts.retainToolCalls {
+						session.ToolCalls = append(session.ToolCalls, tc)
+					}
 
 					bucket := classifyTool(toolName)
 					switch bucket {
@@ -531,7 +655,7 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 						session.TokenBuckets.Plan += tok
 						session.PlanUsage = append(session.PlanUsage, model.PlanEvent{
 							Tool:      toolName,
-							Input:     inputRaw,
+							Input:     tc.Input,
 							Timestamp: timestamp,
 							ID:        toolID,
 						})
@@ -551,19 +675,21 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 				session.ThinkingStats.TotalEstimatedTokens += thinkingTokens
 			}
 
-			msg := model.Message{
-				Role:               "assistant",
-				Type:               recType,
-				UUID:               getStr(rec, "uuid"),
-				ParentUUID:         getStr(rec, "parentUuid"),
-				Timestamp:          timestamp,
-				Text:               truncate(fullText, 1000),
-				TokenEstimate:      responseTokens,
-				Model:              session.Model,
-				ToolCallCount:      toolCallCount,
-				ThinkingBlockCount: thinkingCount,
+			if opts.retainMessages {
+				msg := model.Message{
+					Role:               "assistant",
+					Type:               recType,
+					UUID:               getStr(rec, "uuid"),
+					ParentUUID:         getStr(rec, "parentUuid"),
+					Timestamp:          timestamp,
+					Text:               truncate(fullText, 1000),
+					TokenEstimate:      responseTokens,
+					Model:              session.Model,
+					ToolCallCount:      toolCallCount,
+					ThinkingBlockCount: thinkingCount,
+				}
+				session.Messages = append(session.Messages, msg)
 			}
-			session.Messages = append(session.Messages, msg)
 			msgIndex++
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,6 +23,20 @@ import (
 )
 
 var version = "dev"
+
+type sessionCacheKey struct {
+	path     string
+	size     int64
+	mtimeNS  int64
+	detailed bool
+}
+
+var (
+	claudeSessionCacheMu sync.Mutex
+	claudeSessionCache   = map[sessionCacheKey]*model.ClaudeSession{}
+	codexSessionCacheMu  sync.Mutex
+	codexSessionCache    = map[sessionCacheKey]*model.CodexSession{}
+)
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -245,7 +260,7 @@ func findAndParseClaudeSession(args cliArgs) (*model.ClaudeSession, string) {
 			fmt.Fprintf(os.Stderr, "Session not found: %s\n", args.session)
 			return nil, projectPath
 		}
-		session, err := claudeparser.ParseSession(filePath)
+		session, err := parseClaudeSessionForArgs(filePath, args)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Parse error: %s\n", err)
 			os.Exit(3)
@@ -258,7 +273,7 @@ func findAndParseClaudeSession(args cliArgs) (*model.ClaudeSession, string) {
 		return nil, projectPath
 	}
 
-	session, err := claudeparser.ParseSession(latest.FilePath)
+	session, err := parseClaudeSessionForArgs(latest.FilePath, args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Parse error: %s\n", err)
 		os.Exit(3)
@@ -274,7 +289,7 @@ func findAndParseCodexSession(args cliArgs) (*model.CodexSession, string) {
 
 	if args.session != "" {
 		if _, err := os.Stat(args.session); err == nil {
-			session, err := codexparser.ParseSession(args.session)
+			session, err := parseCodexSessionForArgs(args.session, args)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Parse error: %s\n", err)
 				os.Exit(3)
@@ -290,12 +305,95 @@ func findAndParseCodexSession(args cliArgs) (*model.CodexSession, string) {
 		return nil, projectPath
 	}
 
-	session, err := codexparser.ParseSession(latest.Path)
+	session, err := parseCodexSessionForArgs(latest.Path, args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Parse error: %s\n", err)
 		os.Exit(3)
 	}
 	return session, projectPath
+}
+
+func needsDetailedSession(args cliArgs) bool {
+	return args.jsonOut
+}
+
+func makeSessionCacheKey(filePath string, args cliArgs) (sessionCacheKey, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return sessionCacheKey{}, err
+	}
+	return sessionCacheKey{
+		path:     filePath,
+		size:     info.Size(),
+		mtimeNS:  info.ModTime().UnixNano(),
+		detailed: needsDetailedSession(args),
+	}, nil
+}
+
+func parseClaudeSessionForArgs(filePath string, args cliArgs) (*model.ClaudeSession, error) {
+	key, err := makeSessionCacheKey(filePath, args)
+	if err != nil {
+		return nil, err
+	}
+
+	claudeSessionCacheMu.Lock()
+	cached := claudeSessionCache[key]
+	claudeSessionCacheMu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+
+	if needsDetailedSession(args) {
+		session, err := claudeparser.ParseSession(filePath)
+		if err != nil {
+			return nil, err
+		}
+		claudeSessionCacheMu.Lock()
+		claudeSessionCache[key] = session
+		claudeSessionCacheMu.Unlock()
+		return session, nil
+	}
+	session, err := claudeparser.ParseSessionSummary(filePath)
+	if err != nil {
+		return nil, err
+	}
+	claudeSessionCacheMu.Lock()
+	claudeSessionCache[key] = session
+	claudeSessionCacheMu.Unlock()
+	return session, nil
+}
+
+func parseCodexSessionForArgs(filePath string, args cliArgs) (*model.CodexSession, error) {
+	key, err := makeSessionCacheKey(filePath, args)
+	if err != nil {
+		return nil, err
+	}
+
+	codexSessionCacheMu.Lock()
+	cached := codexSessionCache[key]
+	codexSessionCacheMu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+
+	if needsDetailedSession(args) {
+		session, err := codexparser.ParseSession(filePath)
+		if err != nil {
+			return nil, err
+		}
+		codexSessionCacheMu.Lock()
+		codexSessionCache[key] = session
+		codexSessionCacheMu.Unlock()
+		return session, nil
+	}
+	session, err := codexparser.ParseSessionSummary(filePath)
+	if err != nil {
+		return nil, err
+	}
+	codexSessionCacheMu.Lock()
+	codexSessionCache[key] = session
+	codexSessionCacheMu.Unlock()
+	return session, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -531,7 +629,7 @@ func startServeMode(ctx context.Context, mode string, args cliArgs, comp *model.
 				if _, err := os.Stat(filePath); err != nil {
 					return nil, nil
 				}
-				session, err := claudeparser.ParseSession(filePath)
+				session, err := parseClaudeSessionForArgs(filePath, args)
 				if err != nil {
 					return nil, nil
 				}
@@ -545,7 +643,7 @@ func startServeMode(ctx context.Context, mode string, args cliArgs, comp *model.
 			sessions, _ := codexparser.FindAllSessions()
 			for _, s := range sessions {
 				if strings.Contains(s.Name, id) {
-					session, err := codexparser.ParseSession(s.Path)
+					session, err := parseCodexSessionForArgs(s.Path, args)
 					if err != nil {
 						return nil, nil
 					}

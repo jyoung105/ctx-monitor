@@ -53,3 +53,23 @@ func TestParseSession_Simple(t *testing.T) {
 		t.Error("token buckets should have non-zero values")
 	}
 }
+
+func TestParseSessionSummary_SkipsHeavySlices(t *testing.T) {
+	sess, err := ParseSessionSummary(testdataPath("rollout-simple.jsonl"))
+	if err != nil {
+		t.Fatalf("ParseSessionSummary returned error: %v", err)
+	}
+
+	if len(sess.ToolCalls) != 0 {
+		t.Errorf("tool calls count: got %d, want 0 for summary parse", len(sess.ToolCalls))
+	}
+	if len(sess.ToolResults) != 0 {
+		t.Errorf("tool results count: got %d, want 0 for summary parse", len(sess.ToolResults))
+	}
+	if len(sess.Turns) != 0 {
+		t.Errorf("turns count: got %d, want 0 for summary parse", len(sess.Turns))
+	}
+	if sess.TokenBuckets.ToolResults == 0 {
+		t.Error("expected tool result tokens to still be counted in summary parse")
+	}
+}
