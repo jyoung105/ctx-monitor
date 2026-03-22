@@ -1,9 +1,11 @@
 package codex
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func testdataPath(name string) string {
@@ -71,5 +73,64 @@ func TestParseSessionSummary_SkipsHeavySlices(t *testing.T) {
 	}
 	if sess.TokenBuckets.ToolResults == 0 {
 		t.Error("expected tool result tokens to still be counted in summary parse")
+	}
+}
+
+func TestFindAllSessions_UsesTTLCache(t *testing.T) {
+	origTTL := sessionDiscoveryTTL
+	origNow := sessionDiscoveryNow
+	origCache := sessionDiscoveryCache
+	sessionDiscoveryTTL = time.Hour
+	currentTime := time.Date(2026, time.March, 22, 13, 0, 0, 0, time.UTC)
+	sessionDiscoveryNow = func() time.Time { return currentTime }
+	sessionDiscoveryCache = map[string]sessionDiscoveryCacheEntry{}
+	t.Cleanup(func() {
+		sessionDiscoveryTTL = origTTL
+		sessionDiscoveryNow = origNow
+		sessionDiscoveryCache = origCache
+	})
+
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", home)
+
+	writeSessionFile := func(rel string) {
+		path := filepath.Join(home, "sessions", rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir session dir: %v", err)
+		}
+		data, err := os.ReadFile(testdataPath("rollout-simple.jsonl"))
+		if err != nil {
+			t.Fatalf("read fixture: %v", err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatalf("write session file: %v", err)
+		}
+	}
+
+	writeSessionFile(filepath.Join("2026", "03", "22", "first.jsonl"))
+	first, err := FindAllSessions()
+	if err != nil {
+		t.Fatalf("FindAllSessions first call: %v", err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("first count = %d, want 1", len(first))
+	}
+
+	writeSessionFile(filepath.Join("2026", "03", "22", "second.jsonl"))
+	second, err := FindAllSessions()
+	if err != nil {
+		t.Fatalf("FindAllSessions cached call: %v", err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("cached count = %d, want 1 within TTL", len(second))
+	}
+
+	currentTime = currentTime.Add(2 * time.Hour)
+	third, err := FindAllSessions()
+	if err != nil {
+		t.Fatalf("FindAllSessions after TTL: %v", err)
+	}
+	if len(third) != 2 {
+		t.Fatalf("post-TTL count = %d, want 2", len(third))
 	}
 }

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"hash"
+	"hash/fnv"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -31,11 +33,35 @@ type sessionCacheKey struct {
 	detailed bool
 }
 
+type codexConfigCacheKey struct {
+	projectPath string
+	fingerprint uint64
+}
+
+type claudeConfigCacheEntry struct {
+	config    *model.ClaudeConfig
+	expiresAt time.Time
+}
+
+type timelineCacheKey struct {
+	path    string
+	size    int64
+	mtimeNS int64
+}
+
 var (
 	claudeSessionCacheMu sync.Mutex
 	claudeSessionCache   = map[sessionCacheKey]*model.ClaudeSession{}
 	codexSessionCacheMu  sync.Mutex
 	codexSessionCache    = map[sessionCacheKey]*model.CodexSession{}
+	claudeConfigCacheMu  sync.Mutex
+	claudeConfigCache    = map[string]claudeConfigCacheEntry{}
+	claudeConfigCacheTTL = time.Second
+	claudeConfigNow      = time.Now
+	timelineCacheMu      sync.Mutex
+	timelineCache        = map[timelineCacheKey]interface{}{}
+	codexConfigCacheMu   sync.Mutex
+	codexConfigCache     = map[codexConfigCacheKey]*model.CodexConfig{}
 )
 
 // ---------------------------------------------------------------------------
@@ -317,7 +343,7 @@ func needsDetailedSession(args cliArgs) bool {
 	return args.jsonOut
 }
 
-func makeSessionCacheKey(filePath string, args cliArgs) (sessionCacheKey, error) {
+func makeSessionCacheKey(filePath string, detailed bool) (sessionCacheKey, error) {
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return sessionCacheKey{}, err
@@ -326,12 +352,12 @@ func makeSessionCacheKey(filePath string, args cliArgs) (sessionCacheKey, error)
 		path:     filePath,
 		size:     info.Size(),
 		mtimeNS:  info.ModTime().UnixNano(),
-		detailed: needsDetailedSession(args),
+		detailed: detailed,
 	}, nil
 }
 
-func parseClaudeSessionForArgs(filePath string, args cliArgs) (*model.ClaudeSession, error) {
-	key, err := makeSessionCacheKey(filePath, args)
+func parseClaudeSession(filePath string, detailed bool) (*model.ClaudeSession, error) {
+	key, err := makeSessionCacheKey(filePath, detailed)
 	if err != nil {
 		return nil, err
 	}
@@ -343,7 +369,7 @@ func parseClaudeSessionForArgs(filePath string, args cliArgs) (*model.ClaudeSess
 		return cached, nil
 	}
 
-	if needsDetailedSession(args) {
+	if detailed {
 		session, err := claudeparser.ParseSession(filePath)
 		if err != nil {
 			return nil, err
@@ -363,8 +389,12 @@ func parseClaudeSessionForArgs(filePath string, args cliArgs) (*model.ClaudeSess
 	return session, nil
 }
 
+func parseClaudeSessionForArgs(filePath string, args cliArgs) (*model.ClaudeSession, error) {
+	return parseClaudeSession(filePath, needsDetailedSession(args))
+}
+
 func parseCodexSessionForArgs(filePath string, args cliArgs) (*model.CodexSession, error) {
-	key, err := makeSessionCacheKey(filePath, args)
+	key, err := makeSessionCacheKey(filePath, needsDetailedSession(args))
 	if err != nil {
 		return nil, err
 	}
@@ -396,6 +426,94 @@ func parseCodexSessionForArgs(filePath string, args cliArgs) (*model.CodexSessio
 	return session, nil
 }
 
+func writePathFingerprint(hasher hash.Hash64, path string) {
+	info, err := os.Stat(path)
+	if err != nil {
+		_, _ = hasher.Write([]byte(path + ":missing;"))
+		return
+	}
+	_, _ = hasher.Write([]byte(fmt.Sprintf("%s:%d:%d;", path, info.Size(), info.ModTime().UnixNano())))
+}
+
+func writeSkillDirFingerprint(hasher hash.Hash64, dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		_, _ = hasher.Write([]byte(dir + ":missing;"))
+		return
+	}
+
+	_, _ = hasher.Write([]byte(fmt.Sprintf("%s:entries=%d;", dir, len(entries))))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		skillPath := filepath.Join(dir, entry.Name(), "SKILL.md")
+		writePathFingerprint(hasher, skillPath)
+	}
+}
+
+func codexConfigFingerprint(projectPath string) uint64 {
+	hasher := fnv.New64a()
+
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		writePathFingerprint(hasher, filepath.Join(home, ".codex", "config.toml"))
+		writePathFingerprint(hasher, filepath.Join(home, ".codex", "AGENTS.md"))
+		writeSkillDirFingerprint(hasher, filepath.Join(home, ".agents", "skills"))
+	}
+
+	if projectPath != "" {
+		writePathFingerprint(hasher, filepath.Join(projectPath, ".codex", "config.toml"))
+		writeSkillDirFingerprint(hasher, filepath.Join(projectPath, ".agents", "skills"))
+	}
+
+	return hasher.Sum64()
+}
+
+func parseCodexConfigCached(projectPath string) (*model.CodexConfig, error) {
+	key := codexConfigCacheKey{
+		projectPath: projectPath,
+		fingerprint: codexConfigFingerprint(projectPath),
+	}
+
+	codexConfigCacheMu.Lock()
+	cached := codexConfigCache[key]
+	codexConfigCacheMu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+
+	cfg, err := codexparser.ParseConfig(projectPath)
+	if err != nil {
+		return nil, err
+	}
+
+	codexConfigCacheMu.Lock()
+	codexConfigCache[key] = cfg
+	codexConfigCacheMu.Unlock()
+	return cfg, nil
+}
+
+func parseClaudeConfigCached(projectPath string) *model.ClaudeConfig {
+	now := claudeConfigNow()
+
+	claudeConfigCacheMu.Lock()
+	cached, ok := claudeConfigCache[projectPath]
+	claudeConfigCacheMu.Unlock()
+	if ok && now.Before(cached.expiresAt) {
+		return cached.config
+	}
+
+	cfg := claudeparser.ParseConfig(projectPath)
+	claudeConfigCacheMu.Lock()
+	claudeConfigCache[projectPath] = claudeConfigCacheEntry{
+		config:    cfg,
+		expiresAt: now.Add(claudeConfigCacheTTL),
+	}
+	claudeConfigCacheMu.Unlock()
+	return cfg
+}
+
 // ---------------------------------------------------------------------------
 // Composition builder
 // ---------------------------------------------------------------------------
@@ -407,7 +525,7 @@ func buildComposition(mode string, args cliArgs) *model.Composition {
 			fmt.Fprintln(os.Stderr, "No Claude Code session found.")
 			os.Exit(1)
 		}
-		config := claudeparser.ParseConfig(projectPath)
+		config := parseClaudeConfigCached(projectPath)
 
 		comp := estimator.EstimateClaudeContext(session, config, nil)
 
@@ -429,7 +547,7 @@ func buildComposition(mode string, args cliArgs) *model.Composition {
 			fmt.Fprintln(os.Stderr, "No Codex CLI session found.")
 			os.Exit(1)
 		}
-		config, _ := codexparser.ParseConfig(projectPath)
+		config, _ := parseCodexConfigCached(projectPath)
 
 		comp := estimator.EstimateCodexContext(session, config)
 
@@ -494,6 +612,43 @@ func buildTimelineData(id string, messages []model.Message) interface{} {
 		"totalTokens": runningTotal,
 		"events":      events,
 	}
+}
+
+func makeTimelineCacheKey(filePath string) (timelineCacheKey, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return timelineCacheKey{}, err
+	}
+	return timelineCacheKey{
+		path:    filePath,
+		size:    info.Size(),
+		mtimeNS: info.ModTime().UnixNano(),
+	}, nil
+}
+
+func buildClaudeTimelineCached(filePath, id string) (interface{}, error) {
+	key, err := makeTimelineCacheKey(filePath)
+	if err != nil {
+		return nil, err
+	}
+
+	timelineCacheMu.Lock()
+	cached := timelineCache[key]
+	timelineCacheMu.Unlock()
+	if cached != nil {
+		return cached, nil
+	}
+
+	session, err := claudeparser.ParseSessionTimeline(filePath)
+	if err != nil {
+		return nil, err
+	}
+	data := buildTimelineData(id, session.Messages)
+
+	timelineCacheMu.Lock()
+	timelineCache[key] = data
+	timelineCacheMu.Unlock()
+	return data, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -637,7 +792,7 @@ func startServeMode(ctx context.Context, mode string, args cliArgs, comp *model.
 				if projectPath == "" {
 					projectPath, _ = os.Getwd()
 				}
-				config := claudeparser.ParseConfig(projectPath)
+				config := parseClaudeConfigCached(projectPath)
 				return estimator.EstimateClaudeContext(session, config, nil), nil
 			}
 			sessions, _ := codexparser.FindAllSessions()
@@ -651,28 +806,26 @@ func startServeMode(ctx context.Context, mode string, args cliArgs, comp *model.
 					if projectPath == "" {
 						projectPath, _ = os.Getwd()
 					}
-					config, _ := codexparser.ParseConfig(projectPath)
+					config, _ := parseCodexConfigCached(projectPath)
 					return estimator.EstimateCodexContext(session, config), nil
 				}
 			}
 			return nil, nil
 		},
 		GetTimeline: func(id string) (interface{}, error) {
-			var messages []model.Message
 			if mode == "claude" {
 				_, sessionDir := resolveProjectDir(args)
 				if sessionDir == "" {
 					return nil, nil
 				}
 				filePath := filepath.Join(sessionDir, id+".jsonl")
-				session, err := claudeparser.ParseSession(filePath)
+				data, err := buildClaudeTimelineCached(filePath, id)
 				if err != nil {
 					return nil, nil
 				}
-				messages = session.Messages
+				return data, nil
 			}
-
-			return buildTimelineData(id, messages), nil
+			return nil, nil
 		},
 	}
 

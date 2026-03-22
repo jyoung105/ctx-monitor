@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tonylee/ctx-monitor/internal/model"
@@ -22,6 +23,18 @@ type CodexSessionInfo struct {
 	Mtime time.Time
 	Size  int64
 }
+
+type sessionDiscoveryCacheEntry struct {
+	sessions  []CodexSessionInfo
+	expiresAt time.Time
+}
+
+var (
+	sessionDiscoveryCacheMu sync.Mutex
+	sessionDiscoveryCache   = map[string]sessionDiscoveryCacheEntry{}
+	sessionDiscoveryTTL     = time.Second
+	sessionDiscoveryNow     = time.Now
+)
 
 // FindCodexHome returns the Codex home directory.
 // Priority: CODEX_HOME env, ~/.codex, ~/.codex_home.
@@ -45,6 +58,14 @@ func FindAllSessions() ([]CodexSessionInfo, error) {
 	codexHome := FindCodexHome()
 	sessionsDir := filepath.Join(codexHome, "sessions")
 
+	now := sessionDiscoveryNow()
+	sessionDiscoveryCacheMu.Lock()
+	cached, ok := sessionDiscoveryCache[sessionsDir]
+	sessionDiscoveryCacheMu.Unlock()
+	if ok && now.Before(cached.expiresAt) {
+		return append([]CodexSessionInfo(nil), cached.sessions...), nil
+	}
+
 	var sessions []CodexSessionInfo
 	err := filepath.Walk(sessionsDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -67,6 +88,14 @@ func FindAllSessions() ([]CodexSessionInfo, error) {
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].Mtime.After(sessions[j].Mtime)
 	})
+
+	sessionDiscoveryCacheMu.Lock()
+	sessionDiscoveryCache[sessionsDir] = sessionDiscoveryCacheEntry{
+		sessions:  append([]CodexSessionInfo(nil), sessions...),
+		expiresAt: now.Add(sessionDiscoveryTTL),
+	}
+	sessionDiscoveryCacheMu.Unlock()
+
 	return sessions, nil
 }
 

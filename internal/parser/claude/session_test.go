@@ -1,10 +1,12 @@
 package claude
 
 import (
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tonylee/ctx-monitor/internal/model"
 )
@@ -152,6 +154,117 @@ func TestParseSessionSummary_RetainsHotPathFields(t *testing.T) {
 	}
 	if inputMap["file_path"] != "/src/main.go" {
 		t.Errorf("summary input file_path = %v, want %q", inputMap["file_path"], "/src/main.go")
+	}
+}
+
+func TestParseSessionTimeline_RetainsOnlyMessages(t *testing.T) {
+	sess, err := ParseSessionTimeline(testdataPath("session-simple.jsonl"))
+	if err != nil {
+		t.Fatalf("ParseSessionTimeline returned error: %v", err)
+	}
+
+	if len(sess.Messages) == 0 {
+		t.Fatal("expected timeline messages to be retained")
+	}
+	if len(sess.ToolCalls) != 0 {
+		t.Errorf("tool calls count: got %d, want 0", len(sess.ToolCalls))
+	}
+	if len(sess.Attachments) != 0 {
+		t.Errorf("attachments count: got %d, want 0", len(sess.Attachments))
+	}
+	if len(sess.Turns) != 0 {
+		t.Errorf("turns count: got %d, want 0", len(sess.Turns))
+	}
+}
+
+func TestFindProjectDir_UsesTTLCache(t *testing.T) {
+	origTTL := projectDirCacheTTL
+	origNow := claudeCacheNow
+	origCache := projectDirCache
+	projectDirCacheTTL = time.Hour
+	currentTime := time.Date(2026, time.March, 22, 15, 0, 0, 0, time.UTC)
+	claudeCacheNow = func() time.Time { return currentTime }
+	projectDirCache = map[string]projectDirCacheEntry{}
+	t.Cleanup(func() {
+		projectDirCacheTTL = origTTL
+		claudeCacheNow = origNow
+		projectDirCache = origCache
+	})
+
+	home := t.TempDir()
+	base := filepath.Join(home, ".claude", "projects")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		t.Fatalf("mkdir base: %v", err)
+	}
+	cwd := "/Users/tester/project-a"
+	projectName := strings.ReplaceAll(cwd, "/", "-")
+	resolved := filepath.Join(base, projectName)
+	if err := os.MkdirAll(resolved, 0o755); err != nil {
+		t.Fatalf("mkdir project dir: %v", err)
+	}
+	t.Setenv("HOME", home)
+
+	first := FindProjectDir(cwd)
+	if first != resolved {
+		t.Fatalf("first result = %q, want %q", first, resolved)
+	}
+
+	if err := os.RemoveAll(resolved); err != nil {
+		t.Fatalf("remove project dir: %v", err)
+	}
+	second := FindProjectDir(cwd)
+	if second != resolved {
+		t.Fatalf("cached result = %q, want %q within TTL", second, resolved)
+	}
+
+	currentTime = currentTime.Add(2 * time.Hour)
+	third := FindProjectDir(cwd)
+	if third != "" {
+		t.Fatalf("post-TTL result = %q, want empty after removal", third)
+	}
+}
+
+func TestFindAllSessions_UsesTTLCache(t *testing.T) {
+	origTTL := sessionListCacheTTL
+	origNow := claudeCacheNow
+	origCache := sessionListCache
+	sessionListCacheTTL = time.Hour
+	currentTime := time.Date(2026, time.March, 22, 15, 30, 0, 0, time.UTC)
+	claudeCacheNow = func() time.Time { return currentTime }
+	sessionListCache = map[string]sessionListCacheEntry{}
+	t.Cleanup(func() {
+		sessionListCacheTTL = origTTL
+		claudeCacheNow = origNow
+		sessionListCache = origCache
+	})
+
+	projectDir := t.TempDir()
+	writeSession := func(name string) {
+		data, err := os.ReadFile(testdataPath("session-simple.jsonl"))
+		if err != nil {
+			t.Fatalf("read fixture: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(projectDir, name), data, 0o644); err != nil {
+			t.Fatalf("write session: %v", err)
+		}
+	}
+
+	writeSession("first.jsonl")
+	first := FindAllSessions(projectDir)
+	if len(first) != 1 {
+		t.Fatalf("first count = %d, want 1", len(first))
+	}
+
+	writeSession("second.jsonl")
+	second := FindAllSessions(projectDir)
+	if len(second) != 1 {
+		t.Fatalf("cached count = %d, want 1 within TTL", len(second))
+	}
+
+	currentTime = currentTime.Add(2 * time.Hour)
+	third := FindAllSessions(projectDir)
+	if len(third) != 2 {
+		t.Fatalf("post-TTL count = %d, want 2", len(third))
 	}
 }
 

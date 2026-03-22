@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tonylee/ctx-monitor/internal/model"
@@ -21,6 +22,26 @@ type SessionInfo struct {
 	Size     int64
 }
 
+type projectDirCacheEntry struct {
+	projectDir string
+	expiresAt  time.Time
+}
+
+type sessionListCacheEntry struct {
+	sessions  []SessionInfo
+	expiresAt time.Time
+}
+
+var (
+	projectDirCacheMu   sync.Mutex
+	projectDirCache     = map[string]projectDirCacheEntry{}
+	projectDirCacheTTL  = time.Second
+	sessionListCacheMu  sync.Mutex
+	sessionListCache    = map[string]sessionListCacheEntry{}
+	sessionListCacheTTL = time.Second
+	claudeCacheNow      = time.Now
+)
+
 // GetSessionDir returns the base Claude projects directory.
 func GetSessionDir() string {
 	home, _ := os.UserHomeDir()
@@ -30,12 +51,23 @@ func GetSessionDir() string {
 // FindProjectDir finds the Claude project directory that corresponds to cwd.
 // Claude encodes paths by replacing "/" with "-" (e.g. /Users/foo/bar → -Users-foo-bar).
 func FindProjectDir(cwd string) string {
+	now := claudeCacheNow()
+	projectDirCacheMu.Lock()
+	cached, ok := projectDirCache[cwd]
+	projectDirCacheMu.Unlock()
+	if ok && now.Before(cached.expiresAt) {
+		return cached.projectDir
+	}
+
 	base := GetSessionDir()
 
 	// Strategy 1: dash-encoded
 	dashEncoded := strings.ReplaceAll(cwd, "/", "-")
 	candidate := filepath.Join(base, dashEncoded)
 	if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+		projectDirCacheMu.Lock()
+		projectDirCache[cwd] = projectDirCacheEntry{projectDir: candidate, expiresAt: now.Add(projectDirCacheTTL)}
+		projectDirCacheMu.Unlock()
 		return candidate
 	}
 
@@ -43,6 +75,9 @@ func FindProjectDir(cwd string) string {
 	urlEncoded := url.PathEscape(cwd)
 	candidate2 := filepath.Join(base, urlEncoded)
 	if info, err := os.Stat(candidate2); err == nil && info.IsDir() {
+		projectDirCacheMu.Lock()
+		projectDirCache[cwd] = projectDirCacheEntry{projectDir: candidate2, expiresAt: now.Add(projectDirCacheTTL)}
+		projectDirCacheMu.Unlock()
 		return candidate2
 	}
 
@@ -59,7 +94,11 @@ func FindProjectDir(cwd string) string {
 		// Reverse the dash encoding and check if it matches cwd
 		decoded := strings.ReplaceAll(e.Name(), "-", "/")
 		if decoded == cwd {
-			return filepath.Join(base, e.Name())
+			resolved := filepath.Join(base, e.Name())
+			projectDirCacheMu.Lock()
+			projectDirCache[cwd] = projectDirCacheEntry{projectDir: resolved, expiresAt: now.Add(projectDirCacheTTL)}
+			projectDirCacheMu.Unlock()
+			return resolved
 		}
 	}
 	// Fallback: suffix match (last path segment encoded)
@@ -68,15 +107,30 @@ func FindProjectDir(cwd string) string {
 			continue
 		}
 		if strings.HasSuffix(e.Name(), strings.ReplaceAll(filepath.Base(cwd), "/", "-")) {
-			return filepath.Join(base, e.Name())
+			resolved := filepath.Join(base, e.Name())
+			projectDirCacheMu.Lock()
+			projectDirCache[cwd] = projectDirCacheEntry{projectDir: resolved, expiresAt: now.Add(projectDirCacheTTL)}
+			projectDirCacheMu.Unlock()
+			return resolved
 		}
 	}
 
+	projectDirCacheMu.Lock()
+	projectDirCache[cwd] = projectDirCacheEntry{projectDir: "", expiresAt: now.Add(projectDirCacheTTL)}
+	projectDirCacheMu.Unlock()
 	return ""
 }
 
 // FindAllSessions lists all .jsonl session files in projectPath, sorted by mtime descending.
 func FindAllSessions(projectPath string) []SessionInfo {
+	now := claudeCacheNow()
+	sessionListCacheMu.Lock()
+	cached, ok := sessionListCache[projectPath]
+	sessionListCacheMu.Unlock()
+	if ok && now.Before(cached.expiresAt) {
+		return append([]SessionInfo(nil), cached.sessions...)
+	}
+
 	entries, err := os.ReadDir(projectPath)
 	if err != nil {
 		return nil
@@ -103,6 +157,13 @@ func FindAllSessions(projectPath string) []SessionInfo {
 	sort.Slice(sessions, func(i, j int) bool {
 		return sessions[i].Mtime.After(sessions[j].Mtime)
 	})
+
+	sessionListCacheMu.Lock()
+	sessionListCache[projectPath] = sessionListCacheEntry{
+		sessions:  append([]SessionInfo(nil), sessions...),
+		expiresAt: now.Add(sessionListCacheTTL),
+	}
+	sessionListCacheMu.Unlock()
 	return sessions
 }
 
@@ -189,6 +250,12 @@ func summaryParseOptions() parseOptions {
 		retainToolCalls: true,
 		retainTurns:     true,
 		sanitizeInputs:  true,
+	}
+}
+
+func timelineParseOptions() parseOptions {
+	return parseOptions{
+		retainMessages: true,
 	}
 }
 
@@ -339,6 +406,12 @@ func ParseSession(filePath string) (*model.ClaudeSession, error) {
 // needed for composition, agent, tool-call, and timeline-adjacent summary views.
 func ParseSessionSummary(filePath string) (*model.ClaudeSession, error) {
 	return parseSessionWithOptions(filePath, summaryParseOptions())
+}
+
+// ParseSessionTimeline parses a Claude session while retaining only the fields
+// needed to build timeline payloads.
+func ParseSessionTimeline(filePath string) (*model.ClaudeSession, error) {
+	return parseSessionWithOptions(filePath, timelineParseOptions())
 }
 
 func parseSessionWithOptions(filePath string, opts parseOptions) (*model.ClaudeSession, error) {
