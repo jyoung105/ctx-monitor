@@ -134,3 +134,49 @@ func TestFindAllSessions_UsesTTLCache(t *testing.T) {
 		t.Fatalf("post-TTL count = %d, want 2", len(third))
 	}
 }
+
+func TestParseSessionSummaryFromOffset_AppendsDelta(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "rollout.jsonl")
+	data, err := os.ReadFile(testdataPath("rollout-simple.jsonl"))
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write temp session: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat session: %v", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	appendLines := "\n" +
+		`{"type":"event_msg","payload":{"type":"user_message","content":"Follow up request","timestamp":"2025-03-19T10:00:10Z"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","input_tokens":200,"output_tokens":30,"total_tokens":230,"timestamp":"2025-03-19T10:00:11Z"}}`
+	if _, err := f.WriteString(appendLines); err != nil {
+		_ = f.Close()
+		t.Fatalf("append lines: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+
+	delta, err := ParseSessionSummaryFromOffset(path, info.Size())
+	if err != nil {
+		t.Fatalf("ParseSessionSummaryFromOffset returned error: %v", err)
+	}
+
+	if delta.RawStats.LineCount != 3 {
+		t.Fatalf("delta line count = %d, want 3", delta.RawStats.LineCount)
+	}
+	if delta.TokenBuckets.UserMsg == 0 {
+		t.Fatal("expected appended user message tokens in delta")
+	}
+	if delta.TokenUsage.Total != 230 {
+		t.Fatalf("delta total tokens = %d, want 230", delta.TokenUsage.Total)
+	}
+}

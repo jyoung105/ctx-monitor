@@ -80,6 +80,60 @@ func TestParseCodexSessionForArgs_InvalidatesOnFileChange(t *testing.T) {
 	}
 }
 
+func TestParseCodexSessionForArgs_AppendsIncrementally(t *testing.T) {
+	codexSessionCacheMu.Lock()
+	codexSessionCache = map[sessionCacheKey]*model.CodexSession{}
+	codexSessionCacheMu.Unlock()
+
+	path := copyFixtureToTemp(t, benchmarkRepoPath("testdata", "codex", "rollout-simple.jsonl"))
+
+	first, err := parseCodexSessionForArgs(path, cliArgs{})
+	if err != nil {
+		t.Fatalf("first parse: %v", err)
+	}
+	firstUserMsg := first.TokenBuckets.UserMsg
+	firstLines := first.RawStats.LineCount
+
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open for append: %v", err)
+	}
+	appendLines := "\n" +
+		`{"type":"event_msg","payload":{"type":"user_message","content":"Follow up request","timestamp":"2025-03-19T10:00:10Z"}}` + "\n" +
+		`{"type":"event_msg","payload":{"type":"token_count","input_tokens":200,"output_tokens":30,"total_tokens":230,"timestamp":"2025-03-19T10:00:11Z"}}`
+	if _, err := f.WriteString(appendLines); err != nil {
+		_ = f.Close()
+		t.Fatalf("append lines: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close file: %v", err)
+	}
+	now := time.Now().Add(time.Second)
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+
+	second, err := parseCodexSessionForArgs(path, cliArgs{})
+	if err != nil {
+		t.Fatalf("second parse: %v", err)
+	}
+	if second.TokenBuckets.UserMsg <= firstUserMsg {
+		t.Fatalf("user msg tokens = %d, want > %d after append", second.TokenBuckets.UserMsg, firstUserMsg)
+	}
+	if second.RawStats.LineCount != firstLines+3 {
+		t.Fatalf("line count = %d, want %d", second.RawStats.LineCount, firstLines+3)
+	}
+	if second.TokenUsage.Total <= first.TokenUsage.Total {
+		t.Fatalf("total tokens = %d, want > %d after append", second.TokenUsage.Total, first.TokenUsage.Total)
+	}
+
+	codexSessionCacheMu.Lock()
+	defer codexSessionCacheMu.Unlock()
+	if len(codexSessionCache) != 1 {
+		t.Fatalf("codex session cache size = %d, want 1 after append merge", len(codexSessionCache))
+	}
+}
+
 func TestParseCodexConfigCached_InvalidatesOnConfigChange(t *testing.T) {
 	codexConfigCacheMu.Lock()
 	codexConfigCache = map[codexConfigCacheKey]*model.CodexConfig{}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -215,12 +216,28 @@ func ParseSessionSummary(filePath string) (*model.CodexSession, error) {
 	return parseSessionWithOptions(filePath, summaryParseOptions())
 }
 
+// ParseSessionSummaryFromOffset parses only the appended portion of a Codex
+// session file using summary retention settings.
+func ParseSessionSummaryFromOffset(filePath string, offset int64) (*model.CodexSession, error) {
+	return parseSessionWithOptionsFromOffset(filePath, summaryParseOptions(), offset)
+}
+
 func parseSessionWithOptions(filePath string, opts parseOptions) (*model.CodexSession, error) {
+	return parseSessionWithOptionsFromOffset(filePath, opts, 0)
+}
+
+func parseSessionWithOptionsFromOffset(filePath string, opts parseOptions, offset int64) (*model.CodexSession, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("opening session file: %w", err)
 	}
 	defer f.Close()
+
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("seeking session file: %w", err)
+		}
+	}
 
 	session := &model.CodexSession{
 		File: filePath,

@@ -64,6 +64,11 @@ var (
 	codexConfigCache     = map[codexConfigCacheKey]*model.CodexConfig{}
 )
 
+type cachedCodexSession struct {
+	key     sessionCacheKey
+	session *model.CodexSession
+}
+
 // ---------------------------------------------------------------------------
 // Argument parsing
 // ---------------------------------------------------------------------------
@@ -393,8 +398,107 @@ func parseClaudeSessionForArgs(filePath string, args cliArgs) (*model.ClaudeSess
 	return parseClaudeSession(filePath, needsDetailedSession(args))
 }
 
+func findCachedCodexSessionForAppend(path string, detailed bool, newSize int64) *cachedCodexSession {
+	codexSessionCacheMu.Lock()
+	defer codexSessionCacheMu.Unlock()
+
+	var best *cachedCodexSession
+	for key, session := range codexSessionCache {
+		if key.path != path || key.detailed != detailed {
+			continue
+		}
+		if key.size >= newSize {
+			continue
+		}
+		if best == nil || key.size > best.key.size {
+			best = &cachedCodexSession{key: key, session: session}
+		}
+	}
+	return best
+}
+
+func cloneCodexSession(src *model.CodexSession) *model.CodexSession {
+	if src == nil {
+		return nil
+	}
+	cloned := *src
+	cloned.ToolCalls = append([]model.CodexToolCall(nil), src.ToolCalls...)
+	cloned.ToolResults = append([]model.ToolResult(nil), src.ToolResults...)
+	cloned.CompactionEvents = append([]model.CompactionEvent(nil), src.CompactionEvents...)
+	cloned.SubagentSpawns = append([]model.CodexToolCall(nil), src.SubagentSpawns...)
+	cloned.PlanUsage = append([]model.CodexToolCall(nil), src.PlanUsage...)
+	cloned.Turns = append([]interface{}(nil), src.Turns...)
+	return &cloned
+}
+
+func mergeCodexSessionDelta(base, delta *model.CodexSession) *model.CodexSession {
+	if base == nil {
+		return delta
+	}
+	if delta == nil {
+		return base
+	}
+
+	merged := cloneCodexSession(base)
+	if delta.SessionID != "" {
+		merged.SessionID = delta.SessionID
+	}
+	if delta.Model != "" {
+		merged.Model = delta.Model
+	}
+	if delta.ContextWindowSize > 0 {
+		merged.ContextWindowSize = delta.ContextWindowSize
+	}
+	if delta.ReasoningEffort != "" {
+		merged.ReasoningEffort = delta.ReasoningEffort
+	}
+
+	merged.TokenUsage.Total += delta.TokenUsage.Total
+	merged.TokenUsage.Input += delta.TokenUsage.Input
+	merged.TokenUsage.Cached += delta.TokenUsage.Cached
+	merged.TokenUsage.Output += delta.TokenUsage.Output
+	merged.TokenUsage.Reasoning += delta.TokenUsage.Reasoning
+	if delta.LastTokenUsage.Total > 0 || delta.LastTokenUsage.Input > 0 || delta.LastTokenUsage.Output > 0 {
+		merged.LastTokenUsage = delta.LastTokenUsage
+	}
+
+	merged.ToolCalls = append(merged.ToolCalls, delta.ToolCalls...)
+	merged.ToolResults = append(merged.ToolResults, delta.ToolResults...)
+	merged.CompactionEvents = append(merged.CompactionEvents, delta.CompactionEvents...)
+	merged.SubagentSpawns = append(merged.SubagentSpawns, delta.SubagentSpawns...)
+	merged.PlanUsage = append(merged.PlanUsage, delta.PlanUsage...)
+	merged.Turns = append(merged.Turns, delta.Turns...)
+
+	merged.TokenBuckets.UserMsg += delta.TokenBuckets.UserMsg
+	merged.TokenBuckets.ToolResults += delta.TokenBuckets.ToolResults
+	merged.TokenBuckets.Responses += delta.TokenBuckets.Responses
+	merged.TokenBuckets.Subagent += delta.TokenBuckets.Subagent
+	merged.TokenBuckets.SkillBody += delta.TokenBuckets.SkillBody
+	merged.TokenBuckets.Plan += delta.TokenBuckets.Plan
+	merged.TokenBuckets.Thinking += delta.TokenBuckets.Thinking
+	merged.TokenBuckets.Reasoning += delta.TokenBuckets.Reasoning
+
+	merged.RawStats.LineCount += delta.RawStats.LineCount
+	merged.RawStats.ParseErrors += delta.RawStats.ParseErrors
+
+	return merged
+}
+
+func storeCodexSessionCache(key sessionCacheKey, session *model.CodexSession) {
+	codexSessionCacheMu.Lock()
+	defer codexSessionCacheMu.Unlock()
+
+	for existingKey := range codexSessionCache {
+		if existingKey.path == key.path && existingKey.detailed == key.detailed && existingKey.size < key.size {
+			delete(codexSessionCache, existingKey)
+		}
+	}
+	codexSessionCache[key] = session
+}
+
 func parseCodexSessionForArgs(filePath string, args cliArgs) (*model.CodexSession, error) {
-	key, err := makeSessionCacheKey(filePath, needsDetailedSession(args))
+	detailed := needsDetailedSession(args)
+	key, err := makeSessionCacheKey(filePath, detailed)
 	if err != nil {
 		return nil, err
 	}
@@ -406,23 +510,30 @@ func parseCodexSessionForArgs(filePath string, args cliArgs) (*model.CodexSessio
 		return cached, nil
 	}
 
-	if needsDetailedSession(args) {
+	if !detailed {
+		if previous := findCachedCodexSessionForAppend(filePath, detailed, key.size); previous != nil && previous.key.mtimeNS <= key.mtimeNS {
+			delta, err := codexparser.ParseSessionSummaryFromOffset(filePath, previous.key.size)
+			if err == nil {
+				session := mergeCodexSessionDelta(previous.session, delta)
+				storeCodexSessionCache(key, session)
+				return session, nil
+			}
+		}
+	}
+
+	if detailed {
 		session, err := codexparser.ParseSession(filePath)
 		if err != nil {
 			return nil, err
 		}
-		codexSessionCacheMu.Lock()
-		codexSessionCache[key] = session
-		codexSessionCacheMu.Unlock()
+		storeCodexSessionCache(key, session)
 		return session, nil
 	}
 	session, err := codexparser.ParseSessionSummary(filePath)
 	if err != nil {
 		return nil, err
 	}
-	codexSessionCacheMu.Lock()
-	codexSessionCache[key] = session
-	codexSessionCacheMu.Unlock()
+	storeCodexSessionCache(key, session)
 	return session, nil
 }
 
