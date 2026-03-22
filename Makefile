@@ -2,7 +2,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 BINARY := ctx-monitor
 
-.PHONY: build test test-race vet lint install clean cross
+.PHONY: build test test-race vet lint bench install clean cross
 
 build:
 	go build $(LDFLAGS) -o $(BINARY) ./cmd/ctx-monitor/
@@ -18,6 +18,9 @@ vet:
 
 lint: vet
 	@echo "Lint passed (go vet)"
+
+bench:
+	go test -run '^$$' -bench=. -benchmem ./...
 
 install:
 	go install $(LDFLAGS) ./cmd/ctx-monitor/

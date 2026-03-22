@@ -371,6 +371,33 @@ func render(comp *model.Composition, args cliArgs) {
 	fmt.Println(output)
 }
 
+func buildTimelineData(id string, messages []model.Message) interface{} {
+	if len(messages) == 0 {
+		return nil
+	}
+
+	runningTotal := 0
+	events := make([]map[string]interface{}, 0, len(messages))
+	for i, msg := range messages {
+		runningTotal += msg.TokenEstimate
+		events = append(events, map[string]interface{}{
+			"index":            i,
+			"role":             msg.Role,
+			"timestamp":        msg.Timestamp,
+			"tokens":           msg.TokenEstimate,
+			"cumulativeTokens": runningTotal,
+			"toolCalls":        msg.ToolCallCount,
+		})
+	}
+
+	return map[string]interface{}{
+		"sessionId":   id,
+		"eventCount":  len(events),
+		"totalTokens": runningTotal,
+		"events":      events,
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Watch mode
 // ---------------------------------------------------------------------------
@@ -547,29 +574,7 @@ func startServeMode(ctx context.Context, mode string, args cliArgs, comp *model.
 				messages = session.Messages
 			}
 
-			if len(messages) == 0 {
-				return nil, nil
-			}
-
-			runningTotal := 0
-			events := make([]map[string]interface{}, 0, len(messages))
-			for i, msg := range messages {
-				runningTotal += msg.TokenEstimate
-				events = append(events, map[string]interface{}{
-					"index":            i,
-					"role":             msg.Role,
-					"timestamp":        msg.Timestamp,
-					"tokens":           msg.TokenEstimate,
-					"cumulativeTokens": runningTotal,
-					"toolCalls":        msg.ToolCallCount,
-				})
-			}
-			return map[string]interface{}{
-				"sessionId":   id,
-				"eventCount":  len(events),
-				"totalTokens": runningTotal,
-				"events":      events,
-			}, nil
+			return buildTimelineData(id, messages), nil
 		},
 	}
 
